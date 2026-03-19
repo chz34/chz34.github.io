@@ -2,6 +2,7 @@ theme: jekyll-theme-chirpy
 
 lang: zh-CN
 timezone: Asia/Shanghai
+future: true
 
 title: c34's IT Temple
 tagline: 技术笔记 · 工程实践
