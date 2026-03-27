@@ -299,84 +299,72 @@ ReAct 是大多数现代 Agent 框架的默认模式。`stop_reason == "tool_use
 
 这是整个讨论里最实用的部分。我们用控制力热力图来可视化两种方式的差异：
 
-<svg width="100%" viewBox="0 0 680 340" xmlns="http://www.w3.org/2000/svg">
+<svg width="100%" viewBox="0 0 680 360" xmlns="http://www.w3.org/2000/svg">
 <defs>
   <style>
-    .lbl { font-family: sans-serif; font-size: 12px; font-weight: 500; fill: #1a1a1a; }
+    .lbl { font-family: sans-serif; font-size: 13px; font-weight: 500; fill: #1a1a1a; }
     .sub { font-family: sans-serif; font-size: 11px; fill: #666; }
-    .pct { font-family: sans-serif; font-size: 11px; }
+    .tag { font-family: sans-serif; font-size: 11px; font-weight: 500; }
   </style>
 </defs>
 
-<!-- headers -->
-<text class="sub" x="360" y="18">插件扩展</text>
-<text class="sub" x="530" y="18">自建框架</text>
-<line x1="340" y1="28" x2="340" y2="330" stroke="#ddd" stroke-width="0.5"/>
+<!-- column headers -->
+<text class="sub" x="430" y="18" text-anchor="middle">插件扩展</text>
+<text class="sub" x="594" y="18" text-anchor="middle">自建框架</text>
+<line x1="340" y1="26" x2="340" y2="350" stroke="#ddd" stroke-width="0.5"/>
 
-<!-- rows -->
 <!-- L1 -->
-<text class="lbl" x="16" y="62">L1 Agent system</text>
-<text class="sub" x="16" y="78">目标·协调·记忆</text>
-<rect x="348" y="48" width="160" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="348" y="48" width="48" height="34" rx="4" fill="#AFA9EC"/>
-<text class="pct" x="430" y="68" text-anchor="middle" fill="#3C3489">30%</text>
-<rect x="520" y="48" width="140" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="520" y="48" width="133" height="34" rx="4" fill="#D85A30"/>
-<text class="pct" x="590" y="68" text-anchor="middle" fill="#4A1B0C">95%</text>
+<text class="lbl" x="16" y="62">L1 · Agent system</text>
+<text class="sub" x="16" y="78">目标 · 协调 · 记忆</text>
+<rect x="348" y="48" width="164" height="34" rx="4" fill="#EEEDFE" stroke="#AFA9EC" stroke-width="0.5"/>
+<text class="tag" x="430" y="70" text-anchor="middle" fill="#3C3489">基本无法控制</text>
+<rect x="524" y="48" width="140" height="34" rx="4" fill="#D85A30"/>
+<text class="tag" x="594" y="70" text-anchor="middle" fill="#fff">完全控制</text>
 
 <!-- L2 -->
-<text class="lbl" x="16" y="112">L2 Agent loop</text>
-<text class="sub" x="16" y="128">推理控制·终止条件</text>
-<rect x="348" y="98" width="160" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="348" y="98" width="56" height="34" rx="4" fill="#AFA9EC"/>
-<text class="pct" x="430" y="118" text-anchor="middle" fill="#3C3489">35%</text>
-<rect x="520" y="98" width="140" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="520" y="98" width="133" height="34" rx="4" fill="#D85A30"/>
-<text class="pct" x="590" y="118" text-anchor="middle" fill="#4A1B0C">95%</text>
+<text class="lbl" x="16" y="112">L2 · Agent loop</text>
+<text class="sub" x="16" y="128">推理控制 · 终止条件</text>
+<rect x="348" y="98" width="164" height="34" rx="4" fill="#EEEDFE" stroke="#AFA9EC" stroke-width="0.5"/>
+<text class="tag" x="430" y="120" text-anchor="middle" fill="#3C3489">基本无法控制</text>
+<rect x="524" y="98" width="140" height="34" rx="4" fill="#D85A30"/>
+<text class="tag" x="594" y="120" text-anchor="middle" fill="#fff">完全控制</text>
 
 <!-- L3 -->
-<text class="lbl" x="16" y="162">L3 Context assembly</text>
+<text class="lbl" x="16" y="162">L3 · Context assembly</text>
 <text class="sub" x="16" y="178">messages[] 构造</text>
-<rect x="348" y="148" width="160" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="348" y="148" width="80" height="34" rx="4" fill="#AFA9EC"/>
-<text class="pct" x="430" y="168" text-anchor="middle" fill="#3C3489">50%</text>
-<rect x="520" y="148" width="140" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="520" y="148" width="140" height="34" rx="4" fill="#D85A30"/>
-<text class="pct" x="590" y="168" text-anchor="middle" fill="#4A1B0C">100%</text>
+<rect x="348" y="148" width="164" height="34" rx="4" fill="#F1EFE8" stroke="#ddd" stroke-width="0.5"/>
+<rect x="348" y="148" width="82" height="34" rx="4" fill="#AFA9EC"/>
+<text class="tag" x="430" y="170" text-anchor="middle" fill="#3C3489">部分可控</text>
+<rect x="524" y="148" width="140" height="34" rx="4" fill="#D85A30"/>
+<text class="tag" x="594" y="170" text-anchor="middle" fill="#fff">完全控制</text>
 
 <!-- L4 -->
-<text class="lbl" x="16" y="212">L4 LLM call</text>
-<text class="sub" x="16" y="228">模型推理（双方均无法控制内部）</text>
-<rect x="348" y="198" width="160" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="348" y="198" width="16" height="34" rx="4" fill="#AFA9EC"/>
-<text class="pct" x="430" y="218" text-anchor="middle" fill="#888">10%</text>
-<rect x="520" y="198" width="140" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="520" y="198" width="21" height="34" rx="4" fill="#D85A30"/>
-<text class="pct" x="590" y="218" text-anchor="middle" fill="#888">15%</text>
+<text class="lbl" x="16" y="212">L4 · LLM call</text>
+<text class="sub" x="16" y="228">模型推理</text>
+<rect x="348" y="198" width="164" height="34" rx="4" fill="#F1EFE8" stroke="#ddd" stroke-width="0.5"/>
+<rect x="524" y="198" width="140" height="34" rx="4" fill="#F1EFE8" stroke="#ddd" stroke-width="0.5"/>
+<text class="tag" x="512" y="220" text-anchor="middle" fill="#888">双方均无法控制模型内部</text>
 
 <!-- L5 -->
-<text class="lbl" x="16" y="262">L5 Response parsing</text>
-<text class="sub" x="16" y="278">输出解析·结构提取</text>
-<rect x="348" y="248" width="160" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="348" y="248" width="112" height="34" rx="4" fill="#AFA9EC"/>
-<text class="pct" x="430" y="268" text-anchor="middle" fill="#3C3489">70%</text>
-<rect x="520" y="248" width="140" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="520" y="248" width="140" height="34" rx="4" fill="#D85A30"/>
-<text class="pct" x="590" y="268" text-anchor="middle" fill="#4A1B0C">100%</text>
+<text class="lbl" x="16" y="262">L5 · Response parsing</text>
+<text class="sub" x="16" y="278">输出解析 · 结构提取</text>
+<rect x="348" y="248" width="164" height="34" rx="4" fill="#F1EFE8" stroke="#ddd" stroke-width="0.5"/>
+<rect x="348" y="248" width="110" height="34" rx="4" fill="#AFA9EC"/>
+<text class="tag" x="430" y="270" text-anchor="middle" fill="#3C3489">可定制但受限</text>
+<rect x="524" y="248" width="140" height="34" rx="4" fill="#D85A30"/>
+<text class="tag" x="594" y="270" text-anchor="middle" fill="#fff">完全控制</text>
 
-<!-- L6/L7 -->
-<text class="lbl" x="16" y="312">L6/L7 Tool execution &amp; write-back</text>
-<text class="sub" x="16" y="328">插件的主战场</text>
-<rect x="348" y="298" width="160" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="348" y="298" width="144" height="34" rx="4" fill="#AFA9EC"/>
-<text class="pct" x="430" y="318" text-anchor="middle" fill="#3C3489">90%</text>
-<rect x="520" y="298" width="140" height="34" rx="4" fill="#f0f0f0"/>
-<rect x="520" y="298" width="140" height="34" rx="4" fill="#D85A30"/>
-<text class="pct" x="590" y="318" text-anchor="middle" fill="#4A1B0C">100%</text>
+<!-- L6 -->
+<text class="lbl" x="16" y="312">L6 · Tool execution</text>
+<text class="sub" x="16" y="328">工具调用 · 插件主战场</text>
+<rect x="348" y="298" width="164" height="34" rx="4" fill="#AFA9EC"/>
+<text class="tag" x="430" y="320" text-anchor="middle" fill="#26215C">完全控制</text>
+<rect x="524" y="298" width="140" height="34" rx="4" fill="#D85A30"/>
+<text class="tag" x="594" y="320" text-anchor="middle" fill="#fff">完全控制</text>
 
 <!-- legend -->
-<rect x="348" y="8" width="12" height="10" rx="2" fill="#AFA9EC"/>
-<rect x="520" y="8" width="12" height="10" rx="2" fill="#D85A30"/>
+<rect x="348" y="6" width="12" height="10" rx="2" fill="#AFA9EC"/>
+<rect x="524" y="6" width="12" height="10" rx="2" fill="#D85A30"/>
 </svg>
 
 规律一目了然：**插件扩展的控制力集中在 L6（工具执行），自建框架的增量控制力在 L1-L3（循环上层）**。
