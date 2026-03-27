@@ -1,3 +1,10 @@
+---
+title: "AI Agent 执行全解：从用户意图到一次 LLM API 调用"
+date: 2026-03-27 00:00:00 +0800
+categories: [AI框架]
+tags: [AI Agent, LLM, Workflow, ReAct, LangChain]
+---
+
 # AI Agent 执行全解：从用户意图到一次 LLM API 调用
 
 > 当我们说"让 AI 帮我完成一个复杂任务"，背后发生了什么？本文从执行层级的视角，完整拆解 AI Agent 的运行机制——包括每一层的职责、嵌套关系、以及那个被反复讨论却鲜少说清的问题：**什么时候才真的需要自己构建 Agent？**

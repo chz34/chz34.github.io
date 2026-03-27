@@ -33,6 +33,15 @@ comments:
 
 paginate: 10
 
+jekyll-archives:
+  enabled: [categories, tags]
+  layouts:
+    category: category
+    tag: tag
+  permalinks:
+    tag: /tags/:name/
+    category: /categories/:name/
+
 # ------------ The following options are not recommended to be modified ------------------
 
 kramdown:
