@@ -4,7 +4,7 @@ lang: zh-CN
 timezone: Asia/Shanghai
 future: true
 
-title: c34's IT Temple
+title: /home/chz34
 tagline: 技术笔记 · 工程实践
 description: >-
   记录高性能计算、AI 框架等技术的学习与工程实践
@@ -24,7 +24,7 @@ social:
 theme_mode:
 
 img_cdn: ""
-avatar: ""
+avatar: /assets/img/k_epochs_rollout_reuse.svg
 
 toc: true
 
