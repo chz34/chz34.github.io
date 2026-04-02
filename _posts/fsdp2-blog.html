@@ -1,0 +1,421 @@
+---
+title: PyTorch FSDP2 全解析
+date: 2025-01-01 00:00:00 +0800
+categories: [AI 框架, 分布式训练]
+tags: [FSDP2, PyTorch, DTensor, torch.compile, 分布式训练]
+layout: post
+---
+
+> 基于 PyTorch 主干源码（`torch/distributed/fsdp/_fully_shard/`）与 TorchTitan Llama3 训练实践，逐层拆解 FSDP2 的参数表示、通信调度、编译集成与多维并行组合机制。
+
+## 为什么需要 FSDP2
+
+<p>
+  2022 年随 PyTorch 1.12 发布的 FSDP1（<code>FullyShardedDataParallel</code>）在工程上取得了成功，但其内部实现积累了相当的设计债务：参数被合并成 <code>FlatParameter</code>、通信通过 hook 动态插入、梯度需要从 flat buffer 重新拆解。这些决策在 <code>torch.compile</code> 普及之后暴露出严重的兼容性问题——hook 是图中断点，编译器无法穿越。
+</p>
+
+<p>
+  PyTorch 2.4 正式推出的 <strong>FSDP2</strong>（入口：<code>torch.distributed.fsdp.fully_shard</code>）从根本上重写了这套机制。它以 <strong>DTensor</strong> 作为参数表示的基础类型，以 <strong>Composable Distributed</strong> 框架统一并行语义，让整个训练迭代在单一计算图中完成——通信原语成为图的节点，而不是图的边界。
+</p>
+
+<div class="callout callout-info">
+  <div class="callout-label">背景</div>
+  Meta 内部的 TorchTitan（Llama3/Llama4 训练框架）已全面迁移到 FSDP2。本文所有源码分析基于 PyTorch 主干分支，关键路径为 <code>torch/distributed/fsdp/_fully_shard/</code>，共约 5000 行核心代码。
+</div>
+
+    <!-- ── 1. 核心设计差异 ── -->
+    <h2 id="diff">FSDP1 vs FSDP2：六个维度的根本差异</h2>
+
+    <table class="cmp-table">
+      <thead>
+        <tr>
+          <th>维度</th>
+          <th class="v1">FSDP1</th>
+          <th class="v2">FSDP2</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>API 入口</td>
+          <td class="v1">FullyShardedDataParallel(m)，包装类</td>
+          <td class="v2">fully_shard(m)，函数式原地修改</td>
+        </tr>
+        <tr>
+          <td>参数存储</td>
+          <td class="v1">FlatParameter：多参数合并为一个 1D 张量再切片</td>
+          <td class="v2">每个参数独立包成 DTensor(Shard(0))</td>
+        </tr>
+        <tr>
+          <td>通信调度</td>
+          <td class="v1">register_forward/backward_hook 在运行时插入</td>
+          <td class="v2">通信作为 FX graph 节点，编译器统一调度</td>
+        </tr>
+        <tr>
+          <td>梯度处理</td>
+          <td class="v1">flat grad → 拆解回各参数，易出 view 失效</td>
+          <td class="v2">梯度本身即 DTensor(Shard(0))，zero-copy view</td>
+        </tr>
+        <tr>
+          <td>torch.compile</td>
+          <td class="v1">hook 边界导致图中断，无法整体优化</td>
+          <td class="v2">完整图捕获，通信与计算可跨边界融合</td>
+        </tr>
+        <tr>
+          <td>并行组合</td>
+          <td class="v1">与 TP/PP 组合繁琐，需手动协调 process group</td>
+          <td class="v2">共用 DeviceMesh + DTensor，原生 4D 并行</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ── 2. 初始化链路 ── -->
+    <h2 id="init">初始化链路：从 fully_shard 到 FSDPParam</h2>
+
+    <p>
+      <code>fully_shard</code> 用 <code>@contract(state_cls=FSDPState)</code> 装饰。这个装饰器来自 Composable Distributed 框架，它把一个 <code>FSDPState</code> 对象<strong>绑定到 module 上</strong>而不是替换 module 的类型——这是 FSDP2 能与其他并行方式组合的关键。初始化完毕后，再通过 <code>_apply_to_module</code> 动态创建新类并修改 <code>module.__class__</code>，将 <code>FSDPModule</code> 插入 MRO 最前端：
+    </p>
+
+<pre><code><span class="cm"># _fsdp_init.py · _apply_to_module</span>
+<span class="kw">new_cls</span> = <span class="fn">type</span>(
+    <span class="str">f"FSDP{cls.__name__}"</span>,   <span class="cm"># e.g. "FSDPTransformerBlock"</span>
+    (<span class="cls">FSDPModule</span>, cls),        <span class="cm"># MRO: [FSDPTransformerBlock, FSDPModule, TransformerBlock, ...]</span>
+    {<span class="str">"__deepcopy__"</span>: unimplemented_deepcopy}
+)
+module.__class__ = new_cls   <span class="cm"># 原地替换，isinstance(m, TransformerBlock) 仍然为 True</span></code></pre>
+
+    <p>参数初始化的核心在 <code>_init_param_group</code>，它按 process group 把参数分组，每组创建独立的 <code>FSDPParamGroup</code>。这个分组机制支持 MoE 场景——专家参数可以用不同的 mesh（<code>ep_mesh</code>）而普通参数用 <code>dp_mesh</code>，两者在同一个 module 内共存。</p>
+
+    <div class="callout callout-key">
+      <div class="callout-label">关键设计</div>
+      <strong>Lazy Init</strong>：<code>FSDPState._lazy_init</code> 在首次 forward 时才执行。此时才能确定哪个 state 是 root——root 的 <code>reshard_after_forward</code> 会被自动覆写为 <code>False</code>（保留完整参数以避免反向传播开头多一次 All-Gather），并把所有子状态的 <code>_comm_ctx</code> 替换为同一个 <code>FSDPCommContext</code> 对象，实现"全模型共享一套 CUDA stream"。
+    </div>
+
+    <h3>FSDPParam：参数的三种状态</h3>
+
+    <p>每个 <code>FSDPParam</code> 维护一个状态机：</p>
+
+    <div class="step-flow">
+      <div class="step-item">
+        <div class="step-num">S</div>
+        <div class="step-body">
+          <div class="step-title"><span class="hl-green">SHARDED</span> — 正常态</div>
+          <div class="step-desc">module 上注册分片参数（DTensor, Shard(0)），storage 大小为 param_size/N。是唯一贡献参数显存的状态。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">U</div>
+        <div class="step-body">
+          <div class="step-title"><span class="hl-blue">UNSHARDED</span> — All-Gather 后</div>
+          <div class="step-desc">module 上注册完整参数。<code>_unsharded_param</code> 始终是同一个 Python 对象，storage 从 0 resize 到完整大小，保持 autograd 图的 alias 关系不断裂。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">P</div>
+        <div class="step-body">
+          <div class="step-title"><span class="hl-amber">SHARDED_POST_FORWARD</span> — 中间态</div>
+          <div class="step-desc">仅在 <code>reshard_after_forward=int</code> 时出现，reshard 到更小的 world_size（如节点内 8 卡），显存介于前两者之间。</div>
+        </div>
+      </div>
+    </div>
+
+    <p><strong>Storage resize</strong> 是 FSDP2 解决 FSDP1 view 失效问题的核心手段。Free 时调用 <code>free_storage(tensor)</code> 把 storage 大小设为 0，Alloc 时调用 <code>alloc_storage(tensor)</code> 恢复，整个过程不改变张量对象的 Python identity，autograd 引擎持有的引用始终有效。</p>
+
+    <!-- ── 3. 通信机制 ── -->
+    <h2 id="comm">通信机制：双 Stream 流水线与可插拔后端</h2>
+
+    <h3>foreach_all_gather 的双 stream 设计</h3>
+
+    <p><code>_fsdp_collectives.py</code> 中的 <code>foreach_all_gather</code> 使用两个独立的 CUDA stream 形成流水线：</p>
+
+<pre><code><span class="cm"># foreach_all_gather：copy-in 和 AG 并行执行</span>
+<span class="kw">with</span> device_handle.<span class="fn">stream</span>(all_gather_copy_in_stream):
+    <span class="cm"># 把各参数分片 copy 到连续 buffer（_foreach_copy_ 批量操作）</span>
+    all_gather_input, all_gather_output = torch.ops.fsdp.<span class="fn">all_gather_copy_in</span>(
+        all_gather_inputs, all_gather_output,
+        inp_split_sizes, all_gather_input_numel, rank
+    )
+
+all_gather_stream.<span class="fn">wait_stream</span>(all_gather_copy_in_stream)
+
+<span class="kw">with</span> device_handle.<span class="fn">stream</span>(all_gather_stream):  <span class="cm"># 高优先级 stream</span>
+    all_gather_work = all_gather_comm(
+        output_tensor=all_gather_output,
+        input_tensor=all_gather_input,
+        group=group, async_op=async_op
+    )</code></pre>
+
+    <p><code>all_gather_stream</code> 被设置为高优先级，确保通信不被普通 compute kernel 抢占。copy-in 结束后 stream 间 event 同步，AG 在专用 stream 上异步发出，主 compute stream 可以继续执行当前层的后续操作。</p>
+
+    <h3>三种 AllGather 实现</h3>
+
+    <table class="cmp-table">
+      <thead>
+        <tr><th>实现类</th><th>分配方式</th><th>适用场景</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>DefaultAllGather</td>
+          <td class="v2">torch.empty（CUDA caching allocator）</td>
+          <td>通用默认路径</td>
+        </tr>
+        <tr>
+          <td>ProcessGroupAllocAllGather</td>
+          <td class="v2">ProcessGroup 内置内存池</td>
+          <td>需要 backend 管理内存时</td>
+        </tr>
+        <tr>
+          <td>SymmMemAllGather</td>
+          <td class="v2">CUDA symmetric memory pool</td>
+          <td>NVLink 直连，NCCL Copy Engine zero-copy</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><code>SymmMemAllGather</code> 调用 <code>symm_mem.rendezvous(output_tensor)</code> 让所有 rank 共享同一块物理内存地址空间，NCCL 可以启用 Copy Engine All-Gather——彻底绕开 PCIe，延迟和带宽均优于传统路径。</p>
+
+    <h3>foreach_reduce 的 Reduce-Scatter 与梯度写回</h3>
+
+    <p>反向传播完成后，<code>foreach_reduce</code> 在专用 <code>reduce_scatter_stream</code> 上执行：</p>
+
+<pre><code><span class="cm"># foreach_reduce 尾部：zero-copy 梯度写回</span>
+flat_grad_offset = <span class="num">0</span>
+<span class="kw">for</span> padded_unsharded_size, fsdp_param <span class="kw">in</span> <span class="fn">zip</span>(padded_unsharded_sizes, fsdp_params):
+    <span class="cm"># as_strided 创建 view，不分配新内存</span>
+    new_sharded_grad = torch.<span class="fn">as_strided</span>(
+        reduce_output,
+        size=fsdp_param.sharded_size,
+        stride=fsdp_param.contiguous_sharded_stride,
+        storage_offset=flat_grad_offset,
+    )
+    <span class="cm"># 包成 DTensor(Shard(0))，直接赋给 sharded_param.grad</span>
+    fsdp_param.sharded_param.grad = fsdp_param.<span class="fn">to_sharded_dtensor</span>(new_sharded_grad)
+    flat_grad_offset += padded_unsharded_size.numel() // world_size</code></pre>
+
+    <p>RS 输出是一个 1D flat buffer，所有参数的梯度通过 <code>as_strided</code> 以 <strong>zero-copy view</strong> 的形式指向这块 buffer，整个过程没有额外的内存分配。优化器的 <code>fused=True</code> 实现可以直接对这些 view 原地操作。</p>
+
+    <div class="callout callout-tip">
+      <div class="callout-label">HSDP 路径</div>
+      当 <code>all_reduce_group is not None</code>（即 2D mesh 的 HSDP 模式），<code>foreach_reduce</code> 在 RS 完成后还会额外走 <code>all_reduce_stream</code> 进行节点间梯度同步。两个 stream 之间用 event 串行，RS 和 AR 可以与其他层的反向计算重叠。
+    </div>
+
+    <!-- ── 4. 执行调度 ── -->
+    <h2 id="schedule">执行调度：单次迭代的完整轨迹</h2>
+
+    <div class="step-flow">
+      <div class="step-item">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">root_pre_forward <span class="file-ref">_fsdp_state.py</span></div>
+          <div class="step-desc">迭代起点。<code>all_gather_stream.wait_stream(current_stream)</code> 确保 AG stream 在 compute stream 之后。若存在 <code>post_optim_event</code>（上一次迭代 optimizer 结束时记录），让 AG stream wait 该 event，彻底避免优化器写入和 All-Gather 读取的竞争。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">pre_forward — All-Gather 触发 <span class="file-ref">_fsdp_param_group.py</span></div>
+          <div class="step-desc"><code>unshard(async_op)</code> 发起 All-Gather，<code>wait_for_unshard()</code> 等待完成后调用 <code>foreach_all_gather_copy_out</code>，把 AG 输出拆分到各 <code>FSDPParam._unsharded_param</code>（storage resize）。同时通过 <code>_states_to_forward_prefetch</code> 提前发出下一层的 AG 请求。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">forward 计算 <span class="file-ref">用户模型 / torch.compile FX graph</span></div>
+          <div class="step-desc">参数以完整形态参与计算。AC（Activation Checkpointing）通过 <code>selective_checkpoint_contexts</code> 决定哪些 op 的输出需要保留。<code>torch.compile</code> 把整个 block 编译为 FX graph，FSDP 的 AG/RS 作为 graph 节点参与。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">post_forward — reshard <span class="file-ref">_fsdp_param_group.py</span></div>
+          <div class="step-desc"><code>reshard()</code> 根据策略决定是否释放完整参数（storage resize to 0）。<code>_record_post_forward()</code> 把当前 group 追加到 <code>comm_ctx.post_forward_order</code>，反向传播中按逆序预取。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">pre_backward — 再次 All-Gather <span class="file-ref">_fsdp_state.py</span></div>
+          <div class="step-desc">通过 <code>output.register_hook(self._pre_backward)</code> 触发，而非 module hook——这是 FSDP2 能与 torch.compile 协作的关键。若已 prefetch（<code>unshard_async_op=True</code>），则 unshard 为 no-op。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">post_backward — Reduce-Scatter <span class="file-ref">_fsdp_collectives.py</span></div>
+          <div class="step-desc"><code>foreach_reduce</code> 在 <code>reduce_scatter_stream</code> 上异步执行。RS 完成后通过 <code>as_strided</code> zero-copy 写回各参数的 DTensor grad。与下一层的前向计算流水线重叠。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">root_post_backward_final_callback <span class="file-ref">_fsdp_state.py</span></div>
+          <div class="step-desc">通过 <code>Variable._execution_engine.queue_callback</code> 在反向传播完成后执行清理：等待所有未完成的 RS event，清理 <code>post_forward_order</code>，若 <code>is_last_backward=True</code> 则调用 <code>_finalize_backward</code>。</div>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">optimizer.step() — 纯本地操作</div>
+          <div class="step-desc">每个 rank 的 <code>sharded_param.grad</code> 是 DTensor(Shard(0))，AdamW(fused=True) 直接操作。无任何跨 rank 通信。完成后可 record <code>post_optim_event</code> 供下次迭代使用。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 5. TorchTitan 实践 ── -->
+    <h2 id="torchtitan">TorchTitan 实践：Llama3 的 FSDP2 应用</h2>
+
+    <h3>apply_fsdp 的自底向上原则</h3>
+
+    <p><code>torchtitan/models/llama3/parallelize.py</code> 中的 <code>apply_fsdp</code> 展示了生产级使用模式。<strong>自底向上</strong>调用 <code>fully_shard</code> 是强制要求——先调用叶层，再调用 root，确保每个子模块的参数分配在 root 调用时已经稳定：</p>
+
+<pre><code><span class="cm"># torchtitan: apply_fsdp 调用顺序</span>
+<span class="cm"># 1. 嵌入层（不 reshard，避免首 token 的 AG 开销）</span>
+<span class="fn">fully_shard</span>(model.tok_embeddings, **fsdp_config,
+            reshard_after_forward=reshard_after_forward)
+
+<span class="cm"># 2. 每个 TransformerBlock（独立 FSDP unit，实现层间 overlap）</span>
+<span class="kw">for</span> layer_id, transformer_block <span class="kw">in</span> model.layers.<span class="fn">items</span>():
+    <span class="fn">fully_shard</span>(transformer_block, **fsdp_config,
+                reshard_after_forward=reshard_after_forward)
+
+<span class="cm"># 3. norm + output 组（False：保留在显存，反向传播立即需要）</span>
+<span class="fn">fully_shard</span>([model.norm, model.output], **fsdp_config,
+            reshard_after_forward=<span class="kw">False</span>)
+
+<span class="cm"># 4. root model（必须最后）</span>
+<span class="fn">fully_shard</span>(model, **fsdp_config)
+
+<span class="cm"># 5. 关闭自动梯度归一化，由训练循环用 global token count 手动处理</span>
+<span class="fn">disable_fsdp_gradient_division</span>(model)</code></pre>
+
+    <p>最后几层（<code>norm + output</code>）设 <code>reshard_after_forward=False</code> 是一个精心的优化：反向传播从输出层开始，这些参数会被立即用到，提前保留在显存里省去一次 AG 的延迟。</p>
+
+    <h3>DeviceMesh 的 unflatten 拓扑</h3>
+
+    <p><code>parallel_dims.py</code> 中的 <code>build_mesh</code> 从单一 world mesh 通过 <code>_unflatten</code> 派生所有子 mesh，而非创建多个独立 ProcessGroup。这种设计避免了跨框架组件间的 process group 重复创建：</p>
+
+<pre><code><span class="cm"># ParallelDims.build_mesh() 示例（pp=2, dp_replicate=2, dp_shard=4, cp=1, tp=2）</span>
+world_mesh = <span class="fn">init_device_mesh</span>(device_type, (<span class="num">32</span>,), mesh_dim_names=(<span class="str">"world"</span>,))
+
+dense_mesh = <span class="fn">unflatten_mesh</span>(
+    world_mesh,
+    (<span class="str">"pp"</span>, <span class="str">"dp_replicate"</span>, <span class="str">"fsdp"</span>, <span class="str">"tp"</span>),
+    (pp, dp_replicate, dp_shard * cp, tp),  <span class="cm"># fsdp = dp_shard × cp</span>
+)
+
+<span class="cm"># fully_shard 使用的 mesh</span>
+dp_mesh = dense_mesh[<span class="str">"dp_replicate"</span>, <span class="str">"fsdp"</span>]  <span class="cm"># 2D mesh → HSDP</span>
+<span class="cm"># 或 dense_mesh["fsdp"]                   # 1D mesh → FSDP</span></code></pre>
+
+    <p>值得注意的是，<code>fsdp</code> mesh 的大小是 <code>dp_shard × cp</code>——即使只启用了 Context Parallel（没有数据并行），FSDP 也会被激活，借用其 All-Gather/RS 机制来分布式管理模型权重的序列并行化。</p>
+
+    <h3>并行应用的严格顺序</h3>
+
+    <p>TP → CP → AC → torch.compile → FSDP 的应用顺序不是任意的。关键约束有两个：首先，AC 必须在 compile 之前，<code>ptd_checkpoint_wrapper</code> 需要在未编译状态下插入 hook；其次，compile 必须在 FSDP 之前，这样 Dynamo 能把 FSDP 的通信操作 trace 进图里，否则 FSDP hook 会成为图中断。</p>
+
+    <div class="callout callout-warn">
+      <div class="callout-label">已知限制</div>
+      MoE 模型中，<code>GroupedExperts</code> 的 FSDP 包装仍会产生图中断，因此 <code>apply_compile_sparse</code> 需要以更细粒度（子模块级别）调用 <code>compile</code>，并跳过 experts 部分。FSDP2 + compile + MoE 的三者完全无缝组合仍在开发中。
+    </div>
+
+    <!-- ── 6. AC 策略 ── -->
+    <h2 id="ac">Selective AC：在显存与重计算之间的精确权衡</h2>
+
+    <p>TorchTitan 的 <code>_get_save_ops()</code> 定义了一套 <code>MUST_SAVE</code> 算子集合：</p>
+
+    <table class="cmp-table">
+      <thead>
+        <tr><th>类别</th><th>算子</th><th>理由</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>注意力</td>
+          <td class="v2">_scaled_dot_product_cudnn_attention, flex_attention</td>
+          <td>计算量大，重计算代价高</td>
+        </tr>
+        <tr>
+          <td>线性层</td>
+          <td class="v2">aten.linear（每隔一次）</td>
+          <td>交替保存：奇数次 SAVE，偶数次 RECOMPUTE</td>
+        </tr>
+        <tr>
+          <td>通信结果</td>
+          <td class="v2">reduce_scatter_tensor, all_to_all_single</td>
+          <td>重新通信代价远高于保存激活</td>
+        </tr>
+        <tr>
+          <td>编译输出</td>
+          <td class="v2">inductor_compiled_code</td>
+          <td>compile 后的 fused kernel 不可单独重计算</td>
+        </tr>
+        <tr>
+          <td>D2H 拷贝</td>
+          <td class="v2">aten._to_copy (cuda→cpu)</td>
+          <td>跨设备传输结果不能重算（MoE metadata）</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>矩阵乘的交替策略（偶数次 RECOMPUTE）是一个典型的工程折中：Transformer block 中有两个主要的 matmul（attention proj 和 FFN），只保留其中一个的激活，显存减半而重计算开销翻倍但绝对值较小。</p>
+
+    <!-- ── 7. 硬件使能 ── -->
+    <h2 id="hardware">跨硬件使能：ProcessGroup 抽象的力量</h2>
+
+    <p>FSDP2 的所有通信调用都通过 <code>torch.distributed.ProcessGroup</code> 抽象，切换硬件只需在 <code>init_process_group</code> 时指定 backend：</p>
+
+<pre><code><span class="cm"># NVIDIA GPU（默认路径，NVLink + InfiniBand）</span>
+dist.<span class="fn">init_process_group</span>(backend=<span class="str">"nccl"</span>)
+<span class="fn">fully_shard</span>(model, mesh=<span class="fn">init_device_mesh</span>(<span class="str">"cuda"</span>, (world_size,)))
+
+<span class="cm"># AMD GPU（ROCm，RCCL 与 NCCL API 完全兼容）</span>
+dist.<span class="fn">init_process_group</span>(backend=<span class="str">"nccl"</span>)  <span class="cm"># PyTorch ROCm 版自动路由到 RCCL</span>
+<span class="fn">fully_shard</span>(model, mesh=<span class="fn">init_device_mesh</span>(<span class="str">"cuda"</span>, (world_size,)))
+
+<span class="cm"># CPU / 调试</span>
+dist.<span class="fn">init_process_group</span>(backend=<span class="str">"gloo"</span>)
+<span class="fn">fully_shard</span>(model, mesh=<span class="fn">init_device_mesh</span>(<span class="str">"cpu"</span>, (world_size,)),
+            offload_policy=<span class="cls">CPUOffloadPolicy</span>())
+
+<span class="cm"># TPU / NPU（torch_xla）</span>
+dist.<span class="fn">init_process_group</span>(backend=<span class="str">"xla"</span>)
+<span class="fn">fully_shard</span>(model, mesh=<span class="fn">init_device_mesh</span>(<span class="str">"xla"</span>, (world_size,)))</code></pre>
+
+    <div class="callout callout-info">
+      <div class="callout-label">FSDPParam 的多设备支持</div>
+      <code>_fsdp_param.py</code> 中的 <code>fsdp.copy_</code> 自定义算子注册了 CUDA、XPU、HPU、CPU、MTIA 五个 dispatch key，确保参数 copy 在不同设备上都有正确的实现。<code>all_gather_copy_in</code> 同样如此，这是 FSDP2 能在华为 Ascend（HPU）等非 NVIDIA 设备上运行的基础。
+    </div>
+
+    <!-- ── 8. 总结 ── -->
+    <div class="section-div"></div>
+
+    <h2 id="summary">总结：FSDP2 的设计哲学</h2>
+
+    <p>
+      通读 5000 行源码，FSDP2 的设计哲学可以归纳为三个层次的解耦：
+    </p>
+
+    <p>
+      <strong class="hl-blue">表示与调度解耦</strong>。参数的分片语义（DTensor Placement）是参数自身的属性，不依赖外部包装类。调度逻辑（何时 AG、何时 RS）通过 state 对象和 hook 附着在 module 上，两者可以独立演化。
+    </p>
+
+    <p>
+      <strong class="hl-green">通信与计算解耦</strong>。All-Gather 和 Reduce-Scatter 通过独立的高优先级 stream 异步执行，通过 event 与 compute stream 同步。在 torch.compile 路径下，通信原语进一步成为图节点，编译器可以自由安排它们与计算 kernel 的相对顺序，实现真正的 overlap。
+    </p>
+
+    <p>
+      <strong class="hl-amber">框架与硬件解耦</strong>。<code>AllGather</code> 和 <code>ReduceScatter</code> 是抽象接口，默认实现、ProcessGroup 内存池实现、SymmMem 实现可以随时切换，上层 FSDP 逻辑不感知差异。DeviceMesh 统一描述拓扑，切换硬件只需修改 backend 字符串。
+    </p>
+
+    <p>
+      这三层解耦共同支撑起一个能在 NVIDIA/AMD/Ascend 上运行、能与 TP/CP/PP 自由组合、能被 torch.compile 整体优化的现代分布式训练引擎。随着 FSDP2 逐步成为 PyTorch 的标准 DP 路径，理解这些机制将是高效使用下一代大模型训练基础设施的必要条件。
+    </p>
+
+    <div class="callout callout-key">
+      <div class="callout-label">参考源码路径</div>
+      <code>torch/distributed/fsdp/_fully_shard/_fully_shard.py</code> — 入口与 FSDPModule<br>
+      <code>torch/distributed/fsdp/_fully_shard/_fsdp_param.py</code> — FSDPParam 与 ShardedState<br>
+      <code>torch/distributed/fsdp/_fully_shard/_fsdp_param_group.py</code> — 调度主体<br>
+      <code>torch/distributed/fsdp/_fully_shard/_fsdp_collectives.py</code> — 通信原语<br>
+      <code>torch/distributed/fsdp/_fully_shard/_fsdp_state.py</code> — FSDPState 与 lazy init<br>
+      <code>torch/distributed/fsdp/_fully_shard/_fsdp_init.py</code> — 初始化链路<br>
+      <code>torchtitan/models/llama3/parallelize.py</code> — TorchTitan Llama3 并行化实现<br>
+      <code>torchtitan/distributed/parallel_dims.py</code> — DeviceMesh 拓扑构建
