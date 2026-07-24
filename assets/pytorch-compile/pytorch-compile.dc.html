@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="description" content="torch.compile 编译流程源码级讲解：面向自研硬件 runtime 开发者">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=IBM+Plex+Serif:wght@500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+  doc-page:not(:defined){visibility:hidden}
+  html{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+  body{ font-family:'IBM Plex Sans',system-ui,sans-serif; font-size:10.6pt; line-height:1.62; color:#1a1b1e; text-wrap:pretty; }
+  h1,h2,h3,h4{ font-family:'IBM Plex Serif',Georgia,serif; color:#111214; line-height:1.18; text-wrap:balance; }
+  h1{ font-size:27pt; font-weight:700; letter-spacing:-.4px; margin:0 0 6px; }
+  h2{ font-size:17.5pt; font-weight:600; margin:34px 0 10px; padding-top:14px; border-top:2px solid #17181a; }
+  h3{ font-size:12.6pt; font-weight:600; margin:22px 0 6px; color:#1a1b1e; }
+  h4{ font-size:11pt; font-weight:600; margin:16px 0 4px; color:#3a3c40; font-family:'IBM Plex Sans',sans-serif; letter-spacing:.2px; }
+  p{ margin:0 0 10px; orphans:3; widows:3; }
+  a{ color:#b64a1f; text-decoration:none; border-bottom:1px solid #e2b7a3; }
+  a:hover{ color:#8f3611; }
+  strong{ font-weight:600; color:#111214; }
+  ul,ol{ margin:0 0 12px; padding-left:22px; }
+  li{ margin:3px 0; orphans:3; widows:3; }
+  code{ font-family:'IBM Plex Mono',monospace; font-size:.86em; background:#f1efe9; color:#8a3d1c; padding:1px 4px; border-radius:3px; border:1px solid #e6e2d9; }
+  hr{ border:none; border-top:1px solid #ddd8ce; margin:22px 0; }
+  em{ color:#3a3c40; }
+  .lead{ font-size:12pt; line-height:1.6; color:#3a3c40; margin:14px 0 4px; }
+  .kicker{ font-family:'IBM Plex Mono',monospace; font-size:9pt; letter-spacing:2.5px; text-transform:uppercase; color:#b64a1f; font-weight:500; margin:0 0 14px; }
+  pre.code{ font-family:'IBM Plex Mono',monospace; font-size:8.6pt; line-height:1.5; background:#faf8f3; color:#24262b; border:1px solid #e4e0d6; border-left:3px solid #b64a1f; border-radius:5px; padding:12px 14px; margin:10px 0 12px; max-width:100%; white-space:pre-wrap; overflow-wrap:anywhere; break-inside:avoid; }
+  pre.code .cmt{ color:#9a9382; font-style:normal; }
+  pre.code .kw{ color:#a03a72; }
+  pre.code .fn{ color:#1f6a8f; }
+  pre.code .str{ color:#3f7a3f; }
+  pre.code .dec{ color:#b6791f; }
+  .cap{ font-family:'IBM Plex Mono',monospace; font-size:8pt; color:#8a8578; margin:8px 0 16px; letter-spacing:.2px; }
+  .callout{ break-inside:avoid; border:1px solid #d8d4c8; border-radius:6px; padding:12px 15px; margin:14px 0; background:#fbfaf6; orphans:3; widows:3; }
+  .callout.note{ border-left:4px solid #2f6f9e; background:#f4f8fb; }
+  .callout.warn{ border-left:4px solid #c58a1a; background:#fdf9f0; }
+  .callout.key{ border-left:4px solid #b64a1f; background:#fcf6f2; }
+  .callout .ct{ font-weight:600; font-size:9.5pt; letter-spacing:.3px; margin-bottom:4px; display:block; }
+  .callout.note .ct{ color:#22597f; }
+  .callout.warn .ct{ color:#946515; }
+  .callout.key .ct{ color:#9a3d16; }
+  table.t{ border-collapse:collapse; width:100%; font-size:9pt; margin:12px 0 16px; break-inside:auto; }
+  table.t th{ text-align:left; background:#17181a; color:#f7f5f0; font-weight:600; padding:7px 9px; font-size:8.6pt; letter-spacing:.2px; }
+  table.t td{ border-bottom:1px solid #e4e0d6; padding:6px 9px; vertical-align:top; }
+  table.t tr:nth-child(even) td{ background:#faf8f3; }
+  table.t code{ font-size:8.2pt; background:none; border:none; padding:0; color:#8a3d1c; }
+  .fig{ break-inside:avoid; margin:16px 0 6px; }
+  .fig .cap{ margin-top:10px; }
+  .flow{ display:flex; align-items:stretch; gap:0; flex-wrap:wrap; }
+  .flow.row{ flex-wrap:nowrap; }
+  .node{ flex:1 1 0; min-width:96px; border:1.5px solid #17181a; border-radius:7px; padding:9px 10px; background:#fff; display:flex; flex-direction:column; gap:2px; }
+  .flow.row .node{ min-width:0; padding:9px 8px; }
+  .flow.row .arrow{ flex:0 0 20px; }
+  .node .nt{ font-weight:600; font-size:9pt; color:#111214; }
+  .node .ns{ font-family:'IBM Plex Mono',monospace; font-size:7.6pt; color:#7a756a; line-height:1.35; }
+  .arrow{ flex:0 0 26px; display:flex; align-items:center; justify-content:center; color:#b64a1f; font-size:16px; font-weight:700; }
+  .arrow.down{ width:100%; height:22px; }
+  .band{ border:1px dashed #bdb8ab; border-radius:9px; padding:12px; margin:0; background:#fbfaf6; }
+  .band .bt{ font-family:'IBM Plex Mono',monospace; font-size:8pt; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:9px; font-weight:600; }
+  .b-dyn{ color:#2f6f9e; } .b-aot{ color:#3f8a55; } .b-ind{ color:#b6791f; }
+  .stagehead{ display:flex; align-items:baseline; gap:12px; }
+  .snum{ font-family:'IBM Plex Serif',serif; font-size:15pt; font-weight:700; color:#b64a1f; }
+  .pill{ display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:7.6pt; padding:2px 7px; border-radius:20px; border:1px solid #cfcabd; color:#5c5f66; background:#f4f2ec; letter-spacing:.3px; }
+  .toc{ columns:2; column-gap:34px; font-size:9.6pt; margin:8px 0 2px; }
+  .toc a{ border:none; color:#1a1b1e; display:block; padding:3px 0; border-bottom:1px dotted #ddd8ce; }
+  .toc a:hover{ color:#b64a1f; }
+  .toc .tn{ font-family:'IBM Plex Mono',monospace; color:#b64a1f; font-size:8.4pt; margin-right:7px; }
+  .path{ font-family:'IBM Plex Mono',monospace; font-size:8.2pt; color:#8a8578; }
+  .foot{ display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:7.6pt; color:#a49e90; letter-spacing:.4px; border-top:1px solid #e0dbd0; padding-top:5px; }
+</style>
+<script src="./doc-page.js"></script>
+</helmet>
+
+<doc-page margin="0.82in">
+
+<div slot="footer" class="foot">
+  <span>PyTorch torch.compile · 编译流程与图表达源码级解析</span>
+  <span>for custom-hardware runtime authors</span>
+</div>
+
+<p class="kicker">torch.compile internals · source-level guide</p>
+<h1>从 torch.compile 到设备执行</h1>
+<p class="lead">一篇面向<strong>自研硬件 runtime 开发者</strong>的源码级讲解：Dynamo 与 AOTAutograd 只做入口铺垫，重点落在 Inductor——各阶段"图"的表达形态、如何解析与获取信息（shape / stride / dtype / device）、融合算子从定义到释放的完整生命周期，以及如何注册一套 backend 让图在你自己的芯片上跑起来。</p>
+<p class="path">参考代码：PyTorch main 分支（本仓库快照）· 核心文件 torch/_inductor/{compile_fx,graph,ir,scheduler,lowering}.py、torch/_inductor/codegen/{common,wrapper,wrapper_fxir}.py</p>
+
+<div class="callout key">
+  <span class="ct">这篇文档想让你能回答的三个问题</span>
+  <strong>①</strong> 我最终拿到的是<strong>哪一张 FX graph</strong>，它的节点、opset、元数据长什么样，怎么从里面把每个 tensor 的 shape/stride/dtype/device 全部抠出来。<br>
+  <strong>②</strong> Inductor 在这张图之后<strong>又把它变成了什么</strong>（Inductor IR → Scheduler → kernel），这些中间表达对我接管有没有价值。<br>
+  <strong>③</strong> 我想让图跑在自研硬件上，应该<strong>在哪一层介入</strong>、注册哪些接口、一个融合 kernel 的定义/编译/加载/调用/释放分别发生在什么时候。
+</div>
+
+<h3 style="margin-top:20px">目录</h3>
+<nav class="toc">
+  <a href="#s1"><span class="tn">01</span>三段式总览与数据流</a>
+  <a href="#s2"><span class="tn">02</span>贯穿全文的示例模型</a>
+  <a href="#s3"><span class="tn">03</span>Dynamo：字节码到 FX（简）</a>
+  <a href="#s4"><span class="tn">04</span>AOTAutograd：joint 图与分割（简）</a>
+  <a href="#s5"><span class="tn">05</span>你到底拿到哪张 FX 图</a>
+  <a href="#s6"><span class="tn">06</span>如何解析 FX node 的信息</a>
+  <a href="#s7"><span class="tn">07</span>Inductor 入口与编排</a>
+  <a href="#s8"><span class="tn">08</span>Lowering：FX → Inductor IR</a>
+  <a href="#s9"><span class="tn">09</span>Scheduler：融合与 buffer 生命周期</a>
+  <a href="#s10"><span class="tn">10</span>Codegen 与设备执行</a>
+  <a href="#s11"><span class="tn">11</span>融合算子的完整生命周期</a>
+  <a href="#s12"><span class="tn">12</span>为自研硬件注册 backend</a>
+  <a href="#s13"><span class="tn">13</span>WrapperFxCodegen：wrapper 即 FX 图</a>
+  <a href="#s14"><span class="tn">14</span>介入路线选择与调试</a>
+</nav>
+
+<!-- ============================ 1 ============================ -->
+<h2 id="s1">01 · 三段式总览与数据流</h2>
+<p><code>torch.compile</code> 不是一个单体编译器，而是三个子系统的流水线。每一段接收上一段产出的<strong>图</strong>，做自己的变换后交给下一段。对做 runtime 的人来说，最关键的认知是：<em>这三段之间流动的"图"，格式和语义各不相同</em>。</p>
+
+<div class="fig">
+  <div class="flow row">
+    <div class="node"><span class="nt">Python 模型</span><span class="ns">nn.Module<br>model(x)</span></div>
+    <div class="arrow">→</div>
+    <div class="node" style="border-color:#2f6f9e"><span class="nt" style="color:#2f6f9e">① Dynamo</span><span class="ns">字节码拦截<br>→ FX GraphModule<br>（torch/python ops）</span></div>
+    <div class="arrow">→</div>
+    <div class="node" style="border-color:#3f8a55"><span class="nt" style="color:#3f8a55">② AOTAutograd</span><span class="ns">joint 图 + 分割<br>→ fw / bw 图<br>（functional ATen）</span></div>
+    <div class="arrow">→</div>
+    <div class="node" style="border-color:#b6791f"><span class="nt" style="color:#b6791f">③ Inductor</span><span class="ns">Lowering + Scheduler<br>+ Codegen<br>→ kernel + wrapper</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">可调用函数</span><span class="ns">在设备上<br>launch kernel</span></div>
+  </div>
+  <p class="cap">图 1.1 — torch.compile 三段式流水线。方框之间流动的是不同格式的图。</p>
+</div>
+
+<ul>
+  <li><strong>Dynamo</strong>（<span class="path">torch/_dynamo</span>）：在 CPython 字节码层拦截执行，把一段可追踪的代码捕获成一个 <code>torch.fx.GraphModule</code>。图里的节点是<strong>用户层 torch 算子</strong>（<code>torch.matmul</code>、<code>torch.relu</code>…）。遇到无法追踪的东西就 "graph break"，切成多段。</li>
+  <li><strong>AOTAutograd</strong>（<span class="path">torch/_functorch/aot_autograd.py</span>）：把前向 trace 到 ATen 层，用 autograd 展开出反向，合并成一张 <em>joint graph</em>，再 <code>partition</code> 成 forward / backward 两张图。此时算子已经是<strong>functional、去糖化的 ATen core opset</strong>。</li>
+  <li><strong>Inductor</strong>（<span class="path">torch/_inductor</span>）：官方默认后端。对 ATen FX 图做 post-grad 优化，<em>lower</em> 成自己的 Inductor IR，交给 <em>Scheduler</em> 做融合与排序，最后 codegen 出 Triton / C++ kernel 加一段 wrapper 胶水代码。</li>
+</ul>
+
+<div class="callout note">
+  <span class="ct">给 runtime 开发者的定位提示</span>
+  你有两个天然的介入边界：<strong>(A)</strong> 拿 AOTAutograd 产出的 functional ATen FX 图，完全绕开 Inductor，自己写编译/运行时（<code>torch.compile(backend=…)</code> 或 <code>torch.export</code>）；<strong>(B)</strong> 留在 Inductor 内部，只替换设备相关的 Scheduling / Wrapper / kernel codegen（<code>register_backend_for_device</code>）。两条路线第 14 节详细对比。
+</div>
+
+<!-- ============================ 2 ============================ -->
+<h2 id="s2">02 · 贯穿全文的示例模型</h2>
+<p>为了让"每个阶段的图"具体可见，全文用同一个极小模型追踪到底：</p>
+
+<pre class="code"><span class="kw">import</span> torch, torch.nn <span class="kw">as</span> nn
+
+<span class="kw">class</span> <span class="fn">Tiny</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(<span class="dec">512</span>, <span class="dec">512</span>))
+    <span class="kw">def</span> <span class="fn">forward</span>(self, x):                <span class="cmt"># x: f32[128, 512]</span><span class="kw">
+        return</span> torch.relu(x @ self.w + <span class="dec">1.0</span>)
+
+model = <span class="fn">Tiny</span>().cuda()
+opt = torch.compile(model)              <span class="cmt"># backend="inductor"（默认）</span>
+y = opt(torch.randn(<span class="dec">128</span>, <span class="dec">512</span>, device=<span class="str">"cuda"</span>))</pre>
+<p class="cap">代码 2.1 — 一个 matmul + bias + relu 的小模型。下面每节都会给出它在该阶段的图形态。</p>
+
+<p>它只有三步计算：一次矩阵乘、一次加常数、一次 ReLU。看似平凡，但它恰好覆盖了 Inductor 两类核心处理——<strong>矩阵乘走 template / extern kernel 路线</strong>，而 <strong>add + relu 是可融合的 pointwise 逐元素运算</strong>。这两类的差异贯穿后文。</p>
+
+<!-- ============================ 3 ============================ -->
+<h2 id="s3">03 · Dynamo：字节码到 FX（简介）</h2>
+<p>Dynamo 的职责只有一件事：<strong>把 Python 函数体安全地捕获成一张 FX 图</strong>。它通过 PEP 523 的 frame evaluation hook 接管字节码执行，做符号化追踪，把张量运算记录成 FX 节点，把控制流、外部副作用等无法追踪的部分作为 graph break 保留在 Python 里。</p>
+
+<p>对我们的示例，Dynamo 交给后端的图大致是：</p>
+<pre class="code"><span class="kw">class</span> <span class="fn">GraphModule</span>(torch.nn.Module):
+    <span class="kw">def</span> <span class="fn">forward</span>(self, L_x_: <span class="str">"f32[128, 512]"</span>, L_self_w: <span class="str">"f32[512, 512]"</span>):
+        matmul = torch.matmul(L_x_, L_self_w)      <span class="cmt"># call_function, target=torch.matmul</span>
+        add    = matmul + <span class="dec">1.0</span>                    <span class="cmt"># target=operator.add</span>
+        relu   = torch.relu(add)                   <span class="cmt"># target=torch.relu</span><span class="kw">
+        return</span> (relu,)</pre>
+<p class="cap">代码 3.1 — Dynamo 产出的 torch-IR FX 图（representative）。算子仍是用户层 torch / operator 调用。</p>
+
+<div class="callout warn">
+  <span class="ct">别把这张图当接管点</span>
+  Dynamo 图的算子是<strong>用户层、非 functional、未去糖</strong>的（<code>torch.matmul</code> 而非 <code>aten.mm</code>；bias 加法可能是 <code>operator.add</code>）。它没有反向、没有做 decomposition，opset 不稳定。做 runtime 一般不在这里接管，除非你只要推理且愿意自己补齐 decomposition。
+</div>
+
+<!-- ============================ 4 ============================ -->
+<h2 id="s4">04 · AOTAutograd：joint 图与分割（简介）</h2>
+<p>AOTAutograd 接过 Dynamo 的图，做三件事，产出一对真正"干净"的图：</p>
+<ol>
+  <li><strong>trace 到 ATen 并 functionalize</strong>：把 torch 算子降到 ATen core opset，消除 in-place / view 别名，使图变成纯函数式（no mutation）。</li>
+  <li><strong>用 autograd 展开反向、构建 joint graph</strong>：前向 + 反向合并到一张图里，这是唯一能同时看到 fwd/bwd 的阶段。</li>
+  <li><strong>partition</strong>：默认用 <code>min_cut_rematerialization_partition</code> 决定哪些激活值保存、哪些重算，切成 forward / backward 两张 <code>GraphModule</code>，分别交给 <code>fw_compiler</code> / <code>bw_compiler</code>（即 Inductor 的编译入口）。</li>
+</ol>
+
+<div class="fig">
+  <div class="flow row">
+    <div class="node"><span class="nt">Dynamo 图</span><span class="ns">torch ops</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">trace + functionalize</span><span class="ns">→ ATen, 无别名</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">joint graph</span><span class="ns">fwd + bwd 合并</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">partition</span><span class="ns">min-cut 重物化</span></div>
+    <div class="arrow">→</div>
+    <div class="node" style="border-color:#3f8a55"><span class="nt" style="color:#3f8a55">fw / bw 图</span><span class="ns">functional ATen<br>→ 交给 Inductor</span></div>
+  </div>
+  <p class="cap">图 4.1 — AOTAutograd 内部数据流。fw_compiler 收到的就是右端的 forward 图。</p>
+</div>
+
+<p>示例（推理场景无反向）的 forward 图，也就是 <strong>Inductor 真正拿到的那张图</strong>：</p>
+<pre class="code"><span class="kw">def</span> <span class="fn">forward</span>(self, primals_1: <span class="str">"f32[512, 512]"</span>, primals_2: <span class="str">"f32[128, 512]"</span>):
+    mm   = torch.ops.aten.mm.default(primals_2, primals_1)   <span class="cmt"># f32[128, 512]</span>
+    add  = torch.ops.aten.add.Tensor(mm, <span class="dec">1.0</span>)              <span class="cmt"># f32[128, 512]</span>
+    relu = torch.ops.aten.relu.default(add)                  <span class="cmt"># f32[128, 512]</span><span class="kw">
+    return</span> (relu,)</pre>
+<p class="cap">代码 4.1 — post-AOTAutograd 的 functional ATen forward 图（representative）。参数以 primals_N 形式作为 placeholder 输入。</p>
+
+<p>注意与 Dynamo 图的关键差异：<code>torch.matmul</code> 变成了 <code>aten.mm.default</code>（带 overload 后缀的 <code>OpOverload</code>），参数 <code>self.w</code> 不再是 <code>get_attr</code> 而是<strong>被提升成了输入 placeholder</strong>（<code>primals_1</code>）。这一点对做 runtime 很重要——见第 5 节的 "stateless" 讨论。</p>
+
+<!-- ============================ 5 ============================ -->
+<h2 id="s5">05 · 你到底拿到哪张 FX 图</h2>
+<p>"我拿到的是哪张图"是 runtime 开发者最容易含糊的地方。整个流水线里存在<strong>至少四张形态不同的 FX 图</strong>，取决于你在哪注册 backend：</p>
+
+<table class="t">
+  <thead><tr><th style="width:20%">图</th><th style="width:22%">产出者</th><th style="width:20%">opset</th><th>特征 / 你能拿到它的方式</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Dynamo 图</strong></td><td>Dynamo</td><td>torch / python ops</td><td>非 functional、无反向、含 <code>get_attr</code>。<code>torch.compile(backend=fn)</code> 的 <em>最外层</em> 自定义 backend 会看到它（若不接 aot_autograd）。</td></tr>
+    <tr><td><strong>joint 图</strong></td><td>AOTAutograd</td><td>functional ATen</td><td>fwd+bwd 合并。只有自定义 <code>partition_fn</code> 能看到，一般不作为运行接管点。</td></tr>
+    <tr><td><strong>fw / bw 图</strong></td><td>AOTAutograd partition</td><td>functional ATen core</td><td>分离的前/反向，<strong>参数已提升为输入</strong>（stateless）。<code>aot_autograd</code> 的 <code>fw_compiler</code>/<code>bw_compiler</code> 收到它——<em>这是最推荐的接管点</em>。</td></tr>
+    <tr><td><strong>post_grad 图</strong></td><td>Inductor</td><td>functional ATen（已优化）</td><td>在 fw/bw 图上又跑了 pattern match、融合等 pass。Inductor <code>GraphLowering</code> 遍历的就是它。</td></tr>
+    <tr><td><strong>ExportedProgram</strong></td><td>torch.export</td><td>ATen core（稳定）</td><td>AOT、静态、带 state_dict 与签名。官方承诺稳定的"编译器接口"。做独立工具链时首选。</td></tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="ct">"stateless" 是关键性质</span>
+  在 fw/bw 图及其之后，模型参数与 buffer <strong>已经作为 placeholder 输入节点存在</strong>（示例里的 <code>primals_1</code> 就是 <code>self.w</code>），图里不再有 <code>get_attr</code> 引用外部状态。这意味着你的 runtime 只要按输入顺序喂 tensor 即可，无需理解 <code>nn.Module</code> 的层级——外部编译器（如 torch-mlir 的 <code>stateless_fx_import</code>）正是利用这一点直接消费 Dynamo/AOT 图。
+</div>
+
+<p>如何注册一个能观察这些图的最外层 backend：</p>
+<pre class="code"><span class="kw">from</span> torch._dynamo <span class="kw">import</span> register_backend
+
+<span class="dec">@register_backend</span><span class="kw">
+def</span> <span class="fn">my_backend</span>(gm: torch.fx.GraphModule, example_inputs):
+    <span class="cmt"># gm 是 Dynamo 图（torch ops）。example_inputs 是 FakeTensor 列表。</span>
+    gm.graph.print_tabular()          <span class="cmt"># 打印节点表，快速看清图结构</span><span class="kw">
+    return</span> gm.forward                  <span class="cmt"># 返回一个可调用；这里先退化为 eager</span>
+
+opt = torch.compile(model, backend=<span class="str">"my_backend"</span>)</pre>
+<p class="cap">代码 5.1 — 最外层自定义 backend 的骨架。要拿 functional ATen 图，用下方 aot_autograd 包一层。</p>
+
+<pre class="code"><span class="kw">from</span> torch._functorch.aot_autograd <span class="kw">import</span> aot_autograd
+
+<span class="kw">def</span> <span class="fn">my_compiler</span>(gm, example_inputs):
+    <span class="cmt"># 此处 gm 已是 functional ATen 的 fw 或 bw 图</span><span class="kw">
+    for</span> node <span class="kw">in</span> gm.graph.nodes:
+        ...                            <span class="cmt"># 解析并编译到你的硬件（见第 6 节）</span><span class="kw">
+    return</span> gm.forward
+
+my_backend = aot_autograd(fw_compiler=my_compiler, bw_compiler=my_compiler)
+opt = torch.compile(model, backend=my_backend)</pre>
+<p class="cap">代码 5.2 — 用 aot_autograd 包裹，让你的 compiler 收到分离后的 functional ATen 图。</p>
+
+<!-- ============================ 6 ============================ -->
+<h2 id="s6">06 · 如何解析 FX node 的信息</h2>
+<p>拿到 <code>gm.graph</code> 后，一切信息都挂在 <code>torch.fx.Node</code> 上。一个 node 有五个核心字段，先建立结构认知：</p>
+
+<table class="t">
+  <thead><tr><th style="width:16%">字段</th><th>含义</th></tr></thead>
+  <tbody>
+    <tr><td><code>node.op</code></td><td>节点类型：<code>placeholder</code>（输入）/ <code>call_function</code> / <code>call_method</code> / <code>call_module</code> / <code>get_attr</code> / <code>output</code>。</td></tr>
+    <tr><td><code>node.target</code></td><td>被调用的东西。对 ATen 图是 <code>OpOverload</code>（如 <code>torch.ops.aten.mm.default</code>）；placeholder 时是输入名字符串。</td></tr>
+    <tr><td><code>node.args</code> / <code>node.kwargs</code></td><td>调用实参。元素多为<strong>其它 Node</strong>（表示数据依赖），也可能是常量（标量、shape 列表等）。</td></tr>
+    <tr><td><code>node.meta</code></td><td>元数据字典——<strong>解析 shape/stride/dtype/device 的金矿</strong>。见下。</td></tr>
+    <tr><td><code>node.users</code></td><td>下游消费者（<code>dict[Node, None]</code>），用来分析生命周期与死代码。</td></tr>
+  </tbody>
+</table>
+
+<h3>6.1 从 <code>node.meta['val']</code> 抠出全部张量信息</h3>
+<p>AOTAutograd/Inductor 在 trace 时会把每个节点的输出用 <strong>FakeTensor</strong>（无真实数据、只有元信息的张量）填进 <code>node.meta['val']</code>。它就是一个 <code>torch.Tensor</code> 的"影子"，支持全部形状查询 API：</p>
+
+<pre class="code"><span class="kw">from</span> torch.fx.experimental.symbolic_shapes <span class="kw">import</span> free_symbols
+
+<span class="kw">def</span> <span class="fn">describe</span>(node):
+    val = node.meta.get(<span class="str">"val"</span>)          <span class="cmt"># FakeTensor（或 SymInt / list[FakeTensor]）</span><span class="kw">
+    if</span> isinstance(val, torch.Tensor):
+        info = {
+            <span class="str">"shape"</span>:  tuple(val.shape),     <span class="cmt"># 可能含 SymInt（动态维）</span><span class="str">
+            "stride"</span>: tuple(val.stride()),  <span class="cmt"># 内存步长——布局的核心</span><span class="str">
+            "dtype"</span>:  val.dtype,            <span class="cmt"># torch.float32 ...</span><span class="str">
+            "device"</span>: val.device,           <span class="cmt"># device(type='cuda', index=0)</span><span class="str">
+            "offset"</span>: val.storage_offset(),
+            <span class="str">"contig"</span>: val.is_contiguous(),
+            <span class="str">"dynamic"</span>: bool(free_symbols(val.shape)),  <span class="cmt"># 是否有符号维</span>
+        }
+        <span class="kw">return</span> info</pre>
+<p class="cap">代码 6.1 — 从任意节点解析完整张量元信息。stride 决定你在设备上如何寻址；device 告诉你该把 buffer 放哪。</p>
+
+<div class="callout note">
+  <span class="ct">还有一个 <code>tensor_meta</code></span>
+  除了 <code>val</code>，经过 <code>ShapeProp</code> 的图里每个节点还可能带 <code>node.meta['tensor_meta']</code>——一个 <code>TensorMetadata</code> namedtuple（<code>shape / dtype / requires_grad / stride / memory_format / is_quantized / qparams</code>）。它是纯静态快照，序列化友好；而 <code>val</code>（FakeTensor）能力更强、能表达符号维。两者都读，优先 <code>val</code>。
+</div>
+
+<h3>6.2 遍历整张图并区分节点角色</h3>
+<pre class="code"><span class="kw">for</span> node <span class="kw">in</span> gm.graph.nodes:
+    <span class="kw">if</span> node.op == <span class="str">"placeholder"</span>:
+        <span class="cmt"># 图输入：参数、激活、动态 shape 的符号。按出现顺序对应运行时实参。</span>
+        register_input(node.name, describe(node))
+    <span class="kw">elif</span> node.op == <span class="str">"call_function"</span>:
+        op   = node.target                     <span class="cmt"># OpOverload</span>
+        name = op._schema.name                 <span class="cmt"># "aten::mm"</span><span class="cmt">
+        # node.target._schema 给出完整签名：参数名、类型、是否 mutable、alias 信息</span>
+        emit_op(op, node.args, node.kwargs, out=describe(node))
+    <span class="kw">elif</span> node.op == <span class="str">"get_attr"</span>:
+        <span class="cmt"># 图内常量/参数（fw/bw 图里通常已无此类；export 图里可能有）</span>
+        const = getattr(gm, node.target)
+    <span class="kw">elif</span> node.op == <span class="str">"output"</span>:
+        <span class="cmt"># node.args[0] 是输出（tuple of Node），确定返回顺序与别名</span>
+        bind_outputs(node.args[<span class="dec">0</span>])</pre>
+<p class="cap">代码 6.2 — 一次遍历即可把图转成你自己的算子序列。args 里的 Node 引用天然给出数据依赖（DAG 边）。</p>
+
+<div class="callout key">
+  <span class="ct">从 schema 拿到算子的"契约"</span>
+  <code>node.target</code> 是 <code>OpOverload</code>，它的 <code>._schema</code> 是解析算子语义的权威来源：参数名与类型、返回数、<code>is_mutable</code>、alias 集合。你无需为每个 aten 算子硬编码，读 schema 就能自动生成参数绑定。若某算子你的硬件不支持，可通过 <strong>decomposition</strong>（<code>torch._decomp</code>）把它拆成更基础的算子——Inductor 内部也大量依赖 decomposition table 把 opset 收窄。
+</div>
+
+<!-- ============================ 7 ============================ -->
+<h2 id="s7">07 · Inductor 入口与编排</h2>
+<p>从这里开始进入 Inductor 内部。编译入口是 <code>compile_fx</code>（<span class="path">torch/_inductor/compile_fx.py</span>），它并不直接编译，而是把 pre-grad / partition 回调注入 <code>aot_autograd</code>，真正的编译主体在 <code>codegen_and_compile()</code> 里闭环完成。层次如下：</p>
+
+<div class="fig">
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <div class="node" style="flex:none"><span class="nt">compile_fx()</span><span class="ns">公开入口：config_patches、cpp_wrapper 分支</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none"><span class="nt">_compile_fx_main()</span><span class="ns">注入 pre_grad / partition 回调，调用 aot_autograd</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none;border-color:#3f8a55"><span class="nt" style="color:#3f8a55">aot_autograd 内部</span><span class="ns">pre_grad passes → joint graph → joint passes + partition → fw/bw compiler 回调</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none;border-color:#b6791f"><span class="nt" style="color:#b6791f">codegen_and_compile()</span><span class="ns">③ post_grad passes → ④ GraphLowering.run() → ⑤ Scheduler + codegen</span></div>
+  </div>
+  <p class="cap">图 7.1 — 编译编排。前两个阶段以回调形式在 AOTAutograd 里执行，后三个阶段在 Inductor 自身闭环内。</p>
+</div>
+
+<p>你几乎不需要改这层。重点记住：Inductor 真正开始工作是在 <code>codegen_and_compile()</code>，它先跑 <strong>post_grad passes</strong>（<span class="path">fx_passes/post_grad.py</span>，functional ATen 上最稳定的 FX 优化阶段），再构造 <code>GraphLowering</code> 并 <code>run()</code>。</p>
+
+<!-- ============================ 8 ============================ -->
+<h2 id="s8">08 · Lowering：FX → Inductor IR</h2>
+<p>Lowering 是 Inductor 特有的一步：把 ATen 的 <em>FX 图</em> 翻译成 Inductor 自己的 <em>IR 节点树</em>。做这件事的是 <code>GraphLowering</code>（<span class="path">torch/_inductor/graph.py</span>），它继承自 <code>torch.fx.Interpreter</code>——也就是说，它<strong>用解释器模式逐节点"执行"FX 图，但每一步产生的不是张量，而是 IR 节点</strong>。</p>
+
+<h3>8.1 placeholder → InputBuffer（附带 Layout）</h3>
+<p>输入节点被翻译成带 <code>FixedLayout</code> 的 <code>InputBuffer</code>，Layout 精确记录 device / dtype / sizes / strides：</p>
+<pre class="code"><span class="cmt"># graph.py :: GraphLowering.placeholder（节选）</span><span class="kw">
+if not</span> example._has_symbolic_sizes_strides:
+    sizes, strides = self.static_sizes_strides(example)      <span class="cmt"># 静态 shape</span>
+    storage_offset = sympy.Integer(example.storage_offset())
+<span class="kw">else</span>:
+    sizes, strides, storage_offset = \
+        self.symbolic_sizes_strides_storage_offset(example)  <span class="cmt"># 动态 shape → sympy 符号</span>
+
+tensor = TensorBox.create(
+    InputBuffer(
+        name=target,
+        layout=FixedLayout(example.device, example.dtype, sizes, strides),
+    )
+)
+self.graph_inputs[target] = tensor
+self.graph_input_names.append(target)</pre>
+<p class="cap">代码 8.1 — 输入 lowering。注意 sizes/strides 用 sympy 表达式承载，动态维是符号，静态维是整数。这与你 runtime 里描述 buffer 的方式高度对应。</p>
+
+<div class="callout note">
+  <span class="ct">对齐（alignment）不 guard</span>
+  同一段代码里，Inductor 会根据 example 输入是否对齐决定是否走向量化 load，但<strong>不对 storage_offset 加 guard</strong>（guard 太贵会引发 recompile）。未对齐的输入会被登记到 <code>unaligned_buffers</code>。做硬件 runtime 时同理：要么按 example 对齐假设生成、运行时不满足则 clone，要么显式处理非对齐——这是一个性能/正确性的经典权衡点。
+</div>
+
+<h3>8.2 call_function → 查 lowering 表 → 生成 IR</h3>
+<p>每个 <code>call_function</code> 节点触发 <code>GraphLowering.call_function()</code>，它按优先级查找该 aten 算子的 lowering 规则：</p>
+<pre class="code"><span class="cmt"># 概念化的查找链（graph.py + lowering.py）</span><span class="kw">
+if</span> target <span class="kw">in</span> user_lowerings:   <span class="cmt"># 用户自定义（最高优先级）</span>
+    out = user_lowerings[target](*args, **kwargs)
+<span class="kw">elif</span> target <span class="kw">in</span> lowerings:    <span class="cmt"># 内置 lowering 表</span>
+    out = lowerings[target](*args, **kwargs)
+<span class="kw">else</span>:                          <span class="cmt"># 兜底：生成 FallbackKernel（直接调 ATen 实现）</span>
+    out = fallback_handler(target)(*args, **kwargs)</pre>
+<p class="cap">代码 8.2 — lowering 优先级。找不到规则就 fallback 到调用 eager ATen 算子（对 mm 这类通常走 extern kernel）。</p>
+
+<p>示例里，<code>aten.add</code> 与 <code>aten.relu</code> 走 pointwise lowering，产出 <code>Pointwise</code> 节点；<code>aten.mm</code> 通常不 lower 成 loop，而是走 <code>ExternKernel</code> / template（调 cuBLAS 或 Triton matmul 模板）。</p>
+
+<h3>8.3 Inductor IR 的节点层次</h3>
+<div class="fig">
+  <div class="flow" style="align-items:center">
+    <div class="node"><span class="nt">TensorBox</span><span class="ns">对外的"张量"句柄<br>可变、可 realize()</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">StorageBox</span><span class="ns">一块存储的封装</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">ComputedBuffer</span><span class="ns">带 Layout 的<br>已定形缓冲</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">Loops</span><span class="ns">Pointwise /<br>Reduction</span></div>
+  </div>
+  <p class="cap">图 8.1 — 从外到内：TensorBox → StorageBox → ComputedBuffer → Loops。ExternKernel / FallbackKernel 是并列的另一支（不走 loop，直接调库）。</p>
+</div>
+
+<table class="t">
+  <thead><tr><th style="width:24%">IR 类</th><th>角色</th></tr></thead>
+  <tbody>
+    <tr><td><code>TensorBox</code> / <code>StorageBox</code></td><td>可变盒子（<code>MutableBox</code>），把"张量"与"存储"解耦，支持 in-place 改写与 realize。</td></tr>
+    <tr><td><code>Loops</code> → <code>Pointwise</code> / <code>Reduction</code></td><td>核心：用一个 <code>inner_fn(index) → 值</code> 闭包 + <code>ranges</code>（循环维度）描述计算，<strong>不落地</strong>。</td></tr>
+    <tr><td><code>ComputedBuffer</code></td><td>把 Loops 绑定到一个 <code>Layout</code>，成为可被写入的具体缓冲。</td></tr>
+    <tr><td><code>Layout</code> / <code>FixedLayout</code> / <code>FlexibleLayout</code></td><td>描述内存布局：device、dtype、size、stride、offset。Flexible 允许 Inductor 后续改 stride（如转 channels-last）。</td></tr>
+    <tr><td><code>ExternKernel</code> / <code>FallbackKernel</code></td><td>不生成 loop、直接调外部实现（cuBLAS、aten 兜底）的算子。matmul、conv 常走这里。</td></tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="ct">两条设计原则，直接决定 Inductor IR 好不好被你消费</span>
+  <strong>懒求值：</strong><code>Pointwise</code> 等是计算的<em>描述</em>而非执行，只有 <code>realize()</code> 才真正分配 buffer。Scheduler 因此能在"不算任何数"的情况下重排整张图。<br>
+  <strong>虚拟化（Virtualization）：</strong><code>inner_fn</code> 里的 <code>ops.add(a, b)</code> 是符号化调用——lowering 阶段它返回 <code>OpsValue</code> 符号对象，codegen 阶段同一个闭包在 <code>TritonKernelOverrides</code> 下则输出 Triton 代码字符串。同一套 <code>inner_fn</code> 在不同 handler（<code>V.ops</code>）下产生不同输出，IR 定义与目标代码彻底解耦。<em>如果你要给自研硬件写 codegen，本质就是提供一套自己的 ops handler。</em>
+</div>
+
+<pre class="code"><span class="cmt"># ir.py :: Pointwise —— 一个逐元素算子就是一个 loader 闭包</span><span class="kw">
+def</span> <span class="fn">make_loader</span>(self):
+    <span class="kw">if</span> self.is_zero_elements():
+        <span class="kw">return</span> partial(nop_loader_fn, dtype=self.dtype)
+    <span class="kw">return</span> self.inner_fn      <span class="cmt"># inner_fn(index) -&gt; OpsValue，内部用 ops.* 组合</span></pre>
+<p class="cap">代码 8.3 — Pointwise 的 loader 就是 inner_fn 本身；融合的本质是把内层的 loader 直接嵌进外层的 inner_fn（loader chain）。</p>
+
+<!-- ============================ 9 ============================ -->
+<h2 id="s9">09 · Scheduler：融合与 buffer 生命周期</h2>
+<p><code>Scheduler</code>（<span class="path">torch/_inductor/scheduler.py</span>）接收 <code>graph.operations</code>（全部 IR 节点），完成融合、拓扑排序、buffer 生命周期管理，最后驱动 codegen。它是 Inductor 里离"设备执行"最近的决策中枢。</p>
+
+<div class="fig">
+  <div style="display:flex;flex-direction:column;gap:5px">
+    <div class="node" style="flex:none"><span class="nt">wrap → SchedulerNode</span><span class="ns">每个 IR 节点包成 SchedulerNode / ExternKernelSchedulerNode / NopKernelSchedulerNode</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none"><span class="nt">compute_dependencies()</span><span class="ns">分析 read_writes，建依赖边：MemoryDep / StarDep / WeakDep</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none"><span class="nt">拓扑排序 + 死节点消除</span><span class="ns">topological_sort_schedule() → dead_node_elimination()</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none;border-color:#b6791f"><span class="nt" style="color:#b6791f">fuse_nodes() ×多轮</span><span class="ns">贪心融合：纵向(producer→consumer) + 横向(共享读取)</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none"><span class="nt">compute_last_usage()</span><span class="ns">每个 buffer 的最后使用点 → 决定何时释放</span></div>
+    <div class="arrow down">↓</div>
+    <div class="node" style="flex:none;border-color:#b64a1f"><span class="nt" style="color:#b64a1f">scheduler.codegen()</span><span class="ns">按序驱动 backend 生成 kernel</span></div>
+  </div>
+  <p class="cap">图 9.1 — Scheduler 主流程。融合前后各有一个用户注入点（_pre/_post_fusion_custom_pass）。</p>
+</div>
+
+<p>示例经过 Scheduler 后，<code>add</code> 与 <code>relu</code> 两个 Pointwise 融合成<strong>一个</strong> kernel（甚至可作为 <code>mm</code> 的 epilogue 贴在矩阵乘之后），而 <code>mm</code> 本身是 <code>ExternKernelSchedulerNode</code>，只支持 epilogue 融合。最终从 3 个 ATen 节点收敛为 <strong>1 次 extern mm + 1 个融合 pointwise kernel</strong>。</p>
+
+<table class="t">
+  <thead><tr><th style="width:34%">SchedulerNode 类</th><th style="width:30%">对应 IR</th><th>可融合性</th></tr></thead>
+  <tbody>
+    <tr><td><code>SchedulerNode</code></td><td>ComputedBuffer / TemplateBuffer</td><td>✅ 核心融合对象</td></tr>
+    <tr><td><code>ExternKernelSchedulerNode</code></td><td>ExternKernel（cuBLAS 等）</td><td>⚠️ 仅 epilogue 融合</td></tr>
+    <tr><td><code>NopKernelSchedulerNode</code></td><td>无实际计算</td><td>❌ 仅追踪依赖</td></tr>
+    <tr><td><code>FusedSchedulerNode</code></td><td>多节点合并</td><td>✅ 可递归再融合</td></tr>
+  </tbody>
+</table>
+
+<h3>9.1 buffer 生命周期</h3>
+<p>这一步和你做 runtime 的显存管理直接对应：</p>
+<ul>
+  <li><code>compute_last_usage()</code> 为每个 buffer 计算最后一次被读取的节点。</li>
+  <li>codegen 时，某节点执行完后，其 <code>last_usage</code> 里的 buffer 立即释放（生成 <code>del buf</code> / free 调用）。</li>
+  <li>in-place 复用：<code>SchedulerBuffer.can_inplace()</code> 判断能否原地改写，命中则不分配新 buffer；mutation 通过 <code>mutation_renames</code> 字典追踪重命名链 <code>buf0 → buf1 → buf2</code>。</li>
+</ul>
+
+<!-- ============================ 10 ============================ -->
+<h2 id="s10">10 · Codegen 与设备执行</h2>
+<p>Scheduler 决定"算什么、什么顺序、谁和谁融合"之后，codegen 把它落成两样东西：</p>
+<ol>
+  <li><strong>kernel 代码</strong>——每个融合组一个 Triton kernel（GPU）或 C++/OpenMP kernel（CPU）。由该 device 的 <code>Scheduling</code>（如 <code>TritonScheduling</code>）生成。</li>
+  <li><strong>wrapper 代码</strong>——一段"胶水"函数：按拓扑序分配 buffer、设置 device / stream、launch 每个 kernel、释放 buffer、返回输出。由该 device 的 <code>WrapperCodegen</code> 生成。</li>
+</ol>
+
+<div class="fig">
+  <div class="flow row">
+    <div class="node" style="border-color:#b6791f"><span class="nt">Scheduler</span><span class="ns">融合后节点序列</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">Scheduling.codegen_node</span><span class="ns">→ Triton / C++<br>kernel 源码</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">WrapperCodegen</span><span class="ns">→ 分配 / launch /<br>释放 的 Python(或C++)</span></div>
+    <div class="arrow">→</div>
+    <div class="node" style="border-color:#b64a1f"><span class="nt">编译 + 载入</span><span class="ns">PyCodeCache /<br>cpp_builder</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">可调用函数</span><span class="ns">runtime launch</span></div>
+  </div>
+  <p class="cap">图 10.1 — 从 Scheduler 到可调用函数。wrapper 是"宿主端"代码，kernel 是"设备端"代码。</p>
+</div>
+
+<h3>10.1 wrapper 里的设备交互：DeviceOpOverrides</h3>
+<p>wrapper 需要 set device、拿 stream、做同步。这些设备相关的字符串由 <code>DeviceOpOverrides</code> 提供——这是硬件厂商<strong>最小的一块必填拼图</strong>。看 MTIA（Meta 自研加速器）的完整实现，一共就 5 个方法：</p>
+
+<pre class="code"><span class="cmt"># codegen/mtia/device_op_overrides.py —— 全文如此，没有省略</span><span class="kw">
+class</span> <span class="fn">MTIADeviceOpOverrides</span>(DeviceOpOverrides):
+    <span class="kw">def</span> <span class="fn">import_get_raw_stream_as</span>(self, name):
+        <span class="kw">return</span> <span class="str">f"from torch._C import _mtia_getCurrentRawStream as {name}"</span><span class="kw">
+    def</span> <span class="fn">set_device</span>(self, device_idx):
+        <span class="kw">return</span> <span class="str">f"torch.mtia.set_device({device_idx})"</span><span class="kw">
+    def</span> <span class="fn">synchronize</span>(self):
+        <span class="kw">return</span> <span class="str">"torch.mtia.synchronize()"</span><span class="kw">
+    def</span> <span class="fn">device_guard</span>(self, device_idx):
+        <span class="kw">return</span> <span class="str">f"torch.mtia.device({device_idx})"</span><span class="kw">
+    def</span> <span class="fn">current_stream</span>(self):
+        <span class="kw">return</span> <span class="str">"torch.mtia.current_stream()"</span>
+
+register_device_op_overrides(<span class="str">"mtia"</span>, MTIADeviceOpOverrides())</pre>
+<p class="cap">代码 10.1 — 一个真实自研加速器需要为 Inductor 提供的设备原语，就是这 5 个字符串生成器。</p>
+
+<p>wrapper 生成的 device guard / stream 语句就是调这些方法拼出来的。<code>codegen_device_guard_enter/exit()</code>（<span class="path">codegen/wrapper.py</span>）在进入/退出某 device 上下文时插入 <code>device_guard()</code> 与 stream 获取，kernel launch 时把 <code>current_stream()</code> 作为参数传进去。你的 runtime 若用 Python wrapper，只要让 <code>torch.&lt;yourdev&gt;.*</code> 这套 API 可用即可。</p>
+
+<!-- ============================ 11 ============================ -->
+<h2 id="s11">11 · 融合算子的完整生命周期</h2>
+<p>这是本文最要害的一节：<strong>一个 Inductor 融合 kernel，从被定义、编译、加载、调用到释放，分别在什么时候、什么地方、通过什么接口发生。</strong>下面按时间线拆开，全部落到具体文件与函数。</p>
+
+<div class="fig">
+  <div class="flow row">
+    <div class="node"><span class="nt">① 定义</span><span class="ns">codegen 阶段<br>KernelDefinitionLine</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">② 编译</span><span class="ns">async_compile<br>worker 进程池</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">③ 加载</span><span class="ns">PyCodeCache.load<br>CachingAutotuner</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">④ 调用</span><span class="ns">runtime<br>KernelCallLine + grid</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><span class="nt">⑤ 释放</span><span class="ns">last_usage<br>FreeLine / del</span></div>
+  </div>
+  <p class="cap">图 11.1 — 融合 kernel 生命周期五阶段。①②③ 发生在编译期，④⑤ 发生在每次运行时。</p>
+</div>
+
+<h4>① 定义 — 编译期，codegen 阶段</h4>
+<p>Scheduler 驱动 backend 为一个融合组生成 kernel 源码后，通过 <code>define_kernel()</code>（<span class="path">codegen/wrapper.py:3013</span>）把它记成一条 <code>KernelDefinitionLine</code>。kernel 以 <code>&lt;name&gt; = &lt;kernel_body&gt;</code> 的形式追加到 wrapper 模块源码里（<code>_format_kernel_definition</code>）。此时只是<strong>文本</strong>，还没有被执行。</p>
+<pre class="code"><span class="cmt"># codegen/wrapper.py :: KernelDefinitionLine（wrapper IR 的一行）</span><span class="dec">
+@dataclasses.dataclass</span><span class="kw">
+class</span> <span class="fn">KernelDefinitionLine</span>(WrapperLine):
+    kernel_name: str
+    kernel_body: str        <span class="cmt"># Triton/C++ 源码文本</span>
+    gpu: bool = <span class="kw">True</span><span class="kw">
+    def</span> <span class="fn">codegen</span>(self, code):        <span class="cmt"># 落成 Python wrapper 文本</span>
+        self.wrapper._define_kernel_helper(self.kernel_name, self.kernel_body, gpu=self.gpu)
+    <span class="kw">def</span> <span class="fn">codegen_fx</span>(self, converter):  <span class="cmt"># 或落成 FX 图节点（见第 13 节）</span><span class="kw">
+        return</span> converter._generate_kernel_definition</pre>
+<p class="cap">代码 11.1 — kernel 的"定义"是一条 wrapper IR line，既能落成源码文本，也能落成 FX 节点。</p>
+
+<h4>② 编译 — 编译期，异步 worker 进程池</h4>
+<p>Triton kernel 的实际编译由 <code>AsyncCompile.triton()</code>（<span class="path">torch/_inductor/async_compile.py:408</span>）负责，并且是<strong>并行、带缓存</strong>的：</p>
+<ul>
+  <li>先查 <code>CompiledTritonKernels</code> 缓存——命中直接返回已编译 kernel。</li>
+  <li>未命中且有多个编译线程时，把 <code>(kernel_name, source_code)</code> 派发到 worker 进程；worker 里构造一个 <code>CachingAutotuner</code>、跑 Triton 编译，再把 kernel pickle 回主进程（<code>TritonCompileResult</code>）。</li>
+  <li>返回的是一个 future；真正需要时 <code>.result()</code> 取回。</li>
+</ul>
+<div class="callout note">
+  <span class="ct">为什么设计成异步</span>
+  编译（尤其 Triton→PTX→cubin）很慢。Inductor 把它扔进进程池，主线程继续生成 wrapper，最后在 <code>AsyncCompile.wait()</code> 处统一 join。对你的硬件 backend 同理：把耗时的设备编译放进 worker，别阻塞主编排。
+</div>
+
+<h4>③ 加载 — 编译期末尾，进主进程</h4>
+<p>编译产物通过 <code>PyCodeCache.load(source_code)</code> 载入成一个 Python module，从中 <code>getattr</code> 出 kernel 对象；Triton kernel 被包成 <code>CachingAutotuner</code>（携带多组 config，首次运行时 autotune 选最优 block 参数）。在 FX wrapper 路径里这一步是 <code>FxConverter._import_kernel()</code>（<span class="path">codegen/wrapper_fxir.py</span>），它明确要求 kernel 是 <code>CachingAutotuner</code>。</p>
+
+<h4>④ 调用 — 运行时，每次前向</h4>
+<p>wrapper 里每次 launch 对应一条 <code>KernelCallLine</code>（<span class="path">codegen/wrapper.py:727</span>），由 <code>generate_kernel_call()</code>（<span class="path">:3651</span>）产生。它携带 <code>call_args</code>、<code>arg_types</code>、<code>triton_meta</code>、<code>device</code> 和当前 <code>current_stream_idx</code>：</p>
+<pre class="code"><span class="cmt"># codegen/wrapper.py :: generate_kernel_call（节选）</span>
+device = device <span class="kw">or</span> V.graph.get_current_device_or_throw()
+current_stream_idx = V.graph.scheduler.current_stream_idx
+self.writeline(
+    KernelCallLine(self, kernel_name=kernel_name, call_args=call_args,
+                   arg_types=arg_types, triton=triton,
+                   triton_meta=triton_meta, device=device,
+                   current_stream_idx=current_stream_idx))</pre>
+<p class="cap">代码 11.2 — 每个 kernel 调用点携带的信息：参数、类型、meta、目标设备、stream。grid（launch 维度）由 autotuner 的 _interpret_args_grid 依据 block 参数算出。</p>
+<p>生成的 Python 大致是 <code>kernel_name.run(arg0, arg1, ..., grid=grid, stream=stream)</code>。grid 是 launch 的线程块网格，由 <code>tuner._interpret_args_grid(call_args, config)</code> 依据被选中的 block 参数推出（<span class="path">wrapper_fxir.py:1138</span>）。</p>
+
+<h4>⑤ 释放 — 运行时，用完即弃</h4>
+<p>buffer 在其 <code>last_usage</code> 之后由 <code>FreeLine</code> / <code>make_free_by_names()</code>（<span class="path">codegen/wrapper.py:4042</span>）生成释放语句（Python 下是 <code>del bufN</code>，让引用计数回收显存；C++ 下是显式 free）。可复用的 buffer 走 <code>ReuseLine</code> 而非重新分配。整段 wrapper 结束时 <code>generate_end</code> 收尾。</p>
+
+<table class="t">
+  <thead><tr><th style="width:12%">阶段</th><th style="width:14%">时机</th><th style="width:30%">位置 / 接口</th><th>做什么</th></tr></thead>
+  <tbody>
+    <tr><td><strong>① 定义</strong></td><td>编译期 codegen</td><td><code>define_kernel</code> → <code>KernelDefinitionLine</code></td><td>把 kernel 源码作为文本记入 wrapper</td></tr>
+    <tr><td><strong>② 编译</strong></td><td>编译期（异步）</td><td><code>AsyncCompile.triton</code> + worker 池</td><td>Triton→cubin，带 CompiledTritonKernels 缓存</td></tr>
+    <tr><td><strong>③ 加载</strong></td><td>编译期末</td><td><code>PyCodeCache.load</code> → <code>CachingAutotuner</code></td><td>载入 module、包成可 autotune 的 kernel</td></tr>
+    <tr><td><strong>④ 调用</strong></td><td>每次运行时</td><td><code>generate_kernel_call</code> → <code>KernelCallLine</code></td><td>按 grid + stream 在目标 device 上 launch</td></tr>
+    <tr><td><strong>⑤ 释放</strong></td><td>运行时（用完）</td><td><code>make_free_by_names</code> → <code>FreeLine</code> / <code>ReuseLine</code></td><td>依 last_usage 释放或原地复用 buffer</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================ 12 ============================ -->
+<h2 id="s12">12 · 为自研硬件注册 backend</h2>
+<p>如果你选择"留在 Inductor 内部、只换设备后端"这条路，官方入口是 <code>register_backend_for_device()</code>（<span class="path">codegen/common.py:410</span>）。Intel XPU、Meta MTIA、Apple MPS 都走它。签名如下：</p>
+
+<pre class="code"><span class="cmt"># codegen/common.py</span><span class="kw">
+def</span> <span class="fn">register_backend_for_device</span>(
+    device: str,
+    device_scheduling: SchedulingConstructor,          <span class="cmt"># 必填：融合判断 + kernel codegen</span>
+    device_wrapper_codegen: WrapperConstructor,        <span class="cmt"># 必填：Python wrapper 生成</span>
+    device_cpp_wrapper_codegen: WrapperConstructor = <span class="kw">None</span>,   <span class="cmt"># 可选：C++ wrapper（AOTInductor）</span>
+    device_fx_wrapper_codegen: WrapperConstructor = <span class="kw">None</span>,    <span class="cmt"># 可选：FX 图 wrapper（见第 13 节）</span>
+    device_custom_pass: CustomGraphModulePass = <span class="kw">None</span>,          <span class="cmt"># 可选：设备专属 FX pass</span>
+    device_custom_config: ConfigModule = <span class="kw">None</span>,               <span class="cmt"># 可选：设备专属 config</span>
+) -&gt; <span class="kw">None</span>: ...</pre>
+<p class="cap">代码 12.1 — 设备后端注册入口。两个必填件：Scheduling 与 WrapperCodegen。</p>
+
+<p>你要提供的"三件套"：</p>
+<table class="t">
+  <thead><tr><th style="width:26%">组件</th><th style="width:30%">基类 / 参考</th><th>职责</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Scheduling</strong></td><td><code>BaseScheduling</code>（<span class="path">codegen/common.py</span>）</td><td>决定能否融合（<code>can_fuse_vertical/horizontal</code>）、为每个（融合）节点生成设备 kernel（<code>codegen_node</code>）、生成同步（<code>codegen_sync</code>）、声明后端能力（<code>get_backend_features</code>）。</td></tr>
+    <tr><td><strong>WrapperCodegen</strong></td><td><code>PythonWrapperCodegen</code>（<span class="path">codegen/wrapper.py</span>）</td><td>生成宿主端胶水：分配/释放 buffer、device guard、stream、launch kernel、返回输出。多数情况直接复用 <code>PythonWrapperCodegen</code>。</td></tr>
+    <tr><td><strong>DeviceOpOverrides</strong></td><td><code>register_device_op_overrides</code></td><td>提供 <code>set_device / device_guard / current_stream / synchronize / get_raw_stream</code>（见代码 10.1）。</td></tr>
+  </tbody>
+</table>
+
+<p>Inductor 自己在 <code>init_backend_registration()</code>（<span class="path">codegen/common.py:506</span>）里就是这么注册所有内建设备的，可直接抄作业：</p>
+<pre class="code"><span class="cmt"># codegen/common.py :: init_backend_registration（节选）—— MTIA 的注册</span>
+register_backend_for_device(
+    <span class="str">"mtia"</span>,
+    TritonScheduling,          <span class="cmt"># 复用 Triton 的融合与 kernel codegen</span>
+    PythonWrapperMtia,         <span class="cmt"># MTIA 专属 wrapper（继承 PythonWrapperCodegen）</span>
+    CppWrapperGpu,             <span class="cmt"># AOT 场景的 C++ wrapper</span>
+    WrapperFxCodegen,          <span class="cmt"># FX 图 wrapper</span>
+)</pre>
+<p class="cap">代码 12.2 — MTIA 通过复用 TritonScheduling + 自定义 wrapper 接入。如果你的硬件能吃 Triton，这是成本最低的路径。</p>
+
+<div class="callout key">
+  <span class="ct">两种硬件形态，两种策略</span>
+  <strong>能跑 Triton 的加速器：</strong>直接复用 <code>TritonScheduling</code>，只写 wrapper + DeviceOpOverrides + 让 Triton 认识你的后端。改动量最小（MTIA 路线）。<br>
+  <strong>不吃 Triton、要自己的 ISA/DSL：</strong>从 <code>BaseScheduling</code> 派生，自己实现 <code>codegen_node</code>——即为第 8 节说的"虚拟化 ops handler"提供你的一套 <code>ops.*</code> 到设备指令的翻译。工作量大但完全可控。
+</div>
+
+<!-- ============================ 13 ============================ -->
+<h2 id="s13">13 · WrapperFxCodegen：wrapper 即 FX 图</h2>
+<p>对"想拿 FX 图自己写 runtime"的人，这是最贴合需求的一条路。<code>WrapperFxCodegen</code>（<span class="path">codegen/wrapper_fxir.py:143</span>）不生成 Python/C++ 文本 wrapper，而是把<strong>整个 wrapper 本身生成成一张 <code>torch.fx.GraphModule</code></strong>——buffer 分配、kernel launch、free 全部变成 FX 节点。</p>
+
+<pre class="code"><span class="cmt"># codegen/wrapper_fxir.py</span><span class="kw">
+class</span> <span class="fn">WrapperFxCodegen</span>(PythonWrapperCodegen):
+    <span class="str">"""Backend to generate wrapper code as an FX IR graph."""</span><span class="kw">
+    def</span> <span class="fn">_generate</span>(self, is_inference):
+        ...
+        gm = FxConverter(lines=self.lines, ...).generate()   <span class="cmt"># wrapper IR → torch.fx.GraphModule</span>
+        compiled_fn = self.compile_graph(gm)
+        <span class="kw">return</span> FileBackedGraphModule(gm, compiled_fn), <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">compile_graph</span>(self, gm):
+        <span class="str">"""默认实现：直接用 eager 解释器逐节点跑 kernel。
+        派生后端可 override 成真正的设备编译。"""</span><span class="kw">
+        return</span> gm.forward</pre>
+<p class="cap">代码 13.1 — WrapperFxCodegen 把 wrapper IR 转成 FX 图。compile_graph 是你接管设备执行的钩子。</p>
+
+<p><code>FxConverter</code>（<span class="path">:282</span>）遍历 wrapper IR 的每一行，通过 <code>line.codegen_fx(self)</code> 把它翻译成 FX 节点：<code>AllocateLine</code>→分配节点、<code>KernelCallLine</code>→<code>triton_kernel_wrapper_mutation</code> 高阶算子节点、<code>FreeLine</code>→释放。生成的 <code>GraphModule</code> 里，Triton kernel 通过 <code>wrap_triton</code> 包装、以 <code>get_attr</code> 挂在图上。</p>
+
+<div class="callout key">
+  <span class="ct">为什么这对你极有价值</span>
+  你最终拿到的是一张<strong>可编程、可 <code>print_readable()</code>、可再 pass 的 FX 图</strong>，节点粒度是"分配 / launch 某 kernel / 释放"，而不是不透明的 Python 字符串。你的 runtime 只需：<strong>(1)</strong> override <code>compile_graph(gm)</code>，把这张 wrapper FX 图翻译成你自己的执行计划（command buffer / task graph）；<strong>(2)</strong> 通过 <code>register_backend_for_device(..., device_fx_wrapper_codegen=YourFxWrapper)</code> 注册。默认 <code>compile_graph</code> 甚至直接 <code>gm.forward</code> 用 eager 解释器跑，方便你先跑通再逐步接管。
+</div>
+
+<p>注意 <code>WrapperFxCodegen.supports_caching = False</code>——FX wrapper 目前不参与 Inductor 的 wrapper 缓存，每次编译现生成。这在你迭代 runtime 时反而省心。</p>
+
+<!-- ============================ 14 ============================ -->
+<h2 id="s14">14 · 介入路线选择与调试</h2>
+<h3>14.1 你应该在哪一层接管</h3>
+<table class="t">
+  <thead><tr><th style="width:22%">路线</th><th style="width:26%">拿到的表达</th><th>适合谁</th></tr></thead>
+  <tbody>
+    <tr><td><strong>A. 自定义 Dynamo backend</strong></td><td>Dynamo torch-IR 图</td><td>只做推理、愿自己补 decomposition、想完全脱离 Inductor。</td></tr>
+    <tr><td><strong>A+. aot_autograd 包裹</strong></td><td>functional ATen fw/bw 图</td><td>要训练/反向、想要干净稳定的 opset 又不进 Inductor。<em>多数自研 runtime 的首选。</em></td></tr>
+    <tr><td><strong>B. torch.export</strong></td><td>ExportedProgram（稳定 core ATen）</td><td>做离线 AOT 工具链、跨环境部署、需要稳定接口契约。</td></tr>
+    <tr><td><strong>C. register_backend_for_device</strong></td><td>Inductor IR + Scheduler 融合结果</td><td>想白嫖 Inductor 的融合/调度/autotune，只换设备 codegen。</td></tr>
+    <tr><td><strong>C-fx. device_fx_wrapper_codegen</strong></td><td>wrapper 级 FX 图（分配/launch/free）</td><td>想要 Inductor 的融合，又想以 FX 图形式接管设备执行。</td></tr>
+  </tbody>
+</table>
+
+<div class="callout note">
+  <span class="ct">一句话决策</span>
+  想<strong>自己掌控算子实现与调度</strong> → 走 A+/B，在 functional ATen FX 图上建你自己的 lowering。想<strong>复用 Inductor 的融合与内存规划、只对接你的设备</strong> → 走 C / C-fx。很多团队最终是 <strong>A+ 起步验证正确性，C-fx 冲性能</strong>。
+</div>
+
+<h3>14.2 把各阶段的图打印出来</h3>
+<p>无需改代码，用环境变量即可 dump 每一阶段的图与最终代码——这是你验证"自己解析得对不对"的地面真相：</p>
+<pre class="code"><span class="cmt"># 各阶段 FX 图</span>
+TORCH_LOGS=<span class="str">"graph_code,aot_graphs,post_grad_graphs"</span> python run.py
+<span class="cmt"># Inductor IR（Scheduler 融合前后对比）与融合决策</span>
+TORCH_LOGS=<span class="str">"ir_pre_fusion,ir_post_fusion,fusion,schedule"</span> python run.py
+<span class="cmt"># 最终 kernel 源码 + wrapper 输出代码</span>
+TORCH_LOGS=<span class="str">"output_code,kernel_code"</span> python run.py</pre>
+<p class="cap">代码 14.1 — 全流程可观测。output_code 直接给你 Inductor 生成的完整 wrapper + kernel，是最好的"标准答案"。</p>
+
+<p>另外，<code>torch._inductor.config.trace.enabled = True</code> 会把中间产物（FX 图、IR、Scheduler 图的可视化）落盘到 debug 目录；<code>compile_fx</code> 也支持传 <code>backend</code> 分档（<code>eager</code> / <code>aot_eager</code> / <code>aot_eager_decomp_partition</code> / <code>inductor</code>）逐层缩小正确性问题的范围。</p>
+
+<hr>
+<h3>结语</h3>
+<p>对做硬件 runtime 的人，torch.compile 的价值不在"它能生成 Triton"，而在<strong>它把一段动态 Python 逐层收敛成了一张 stateless、functional、带完整 shape/stride/dtype/device 元信息的 FX 图</strong>，并且在每一层都留了标准注入点。你要做的，是选定介入边界（functional ATen FX 图，或 wrapper 级 FX 图），把节点解析成你自己的算子表达，把 buffer 生命周期映射成你的显存管理，把 kernel launch 映射成你的下发接口。本文给出的文件与函数坐标，足以让你照着把第一条链路跑通。</p>
+<p class="path">下一步可做：用一个真实完成的模型（如一层 Transformer block）走一遍 TORCH_LOGS=output_code，对照本文的生命周期表逐条核对分配/launch/free 的落点。</p>
+
+</doc-page>
+</x-dc>
+</body>
+</html>
